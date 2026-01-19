@@ -469,12 +469,23 @@ async fn test_dst_web_search_missing_api_key() {
 
     let result = Simulation::new(config)
         .run_async(|_sim_env| async move {
-            let _guard = env_lock();
-            let prev_key = std::env::var("TAVILY_API_KEY").ok();
-            std::env::set_var("TAVILY_API_KEY", "");
+            let state;
+            let registry;
+            {
+                let _guard = env_lock();
+                let prev_key = std::env::var("TAVILY_API_KEY").ok();
+                std::env::set_var("TAVILY_API_KEY", "");
 
-            let state = AppState::new();
-            let registry = state.tool_registry();
+                state = AppState::new();
+                registry = state.tool_registry();
+
+                if let Some(prev) = prev_key {
+                    std::env::set_var("TAVILY_API_KEY", prev);
+                } else {
+                    std::env::remove_var("TAVILY_API_KEY");
+                }
+            }
+
             register_web_search_tool(registry).await;
 
             let output = registry
@@ -485,12 +496,6 @@ async fn test_dst_web_search_missing_api_key() {
                     }),
                 )
                 .await;
-
-            if let Some(prev) = prev_key {
-                std::env::set_var("TAVILY_API_KEY", prev);
-            } else {
-                std::env::remove_var("TAVILY_API_KEY");
-            }
 
             assert!(output.output.contains("TAVILY_API_KEY"));
             Ok(())

@@ -300,11 +300,11 @@ impl Embedder for LocalEmbedder {
         let mut all_embeddings = Vec::with_capacity(texts.len());
 
         for chunk in truncated.chunks(self.config.batch_size_max) {
-            let embeddings = model.embed(chunk, None).map_err(|e| {
-                MemoryError::EmbeddingError {
+            let embeddings = model
+                .embed(chunk, None)
+                .map_err(|e| MemoryError::EmbeddingError {
                     message: format!("Failed to generate embeddings: {}", e),
-                }
-            })?;
+                })?;
 
             all_embeddings.extend(embeddings);
         }

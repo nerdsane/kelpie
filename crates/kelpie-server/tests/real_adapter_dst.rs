@@ -75,9 +75,7 @@ async fn test_dst_real_adapter_fault_resilience() {
             // Streaming should work despite faults
             // Full test requires integration with actual LLM
 
-            // Verify fault injection config is correct
-            assert!(true, "Fault config accepted");
-
+            // Fault injection config accepted
             Ok(())
         })
         .await;

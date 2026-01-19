@@ -200,7 +200,7 @@ async fn list_server_tools(
 #[cfg(test)]
 mod tests {
     use super::super::router as api_router;
-    
+
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;

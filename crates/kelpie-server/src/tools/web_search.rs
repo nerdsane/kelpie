@@ -252,6 +252,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::assertions_on_constants)] // TigerStyle: validate constants
     fn test_search_results_validation() {
         // Valid range
         assert!(SEARCH_RESULTS_DEFAULT <= SEARCH_RESULTS_MAX);

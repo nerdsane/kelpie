@@ -253,6 +253,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::assertions_on_constants)] // TigerStyle: validate constants
     fn test_constants_valid() {
         assert!(EXECUTION_TIMEOUT_SECONDS_DEFAULT >= EXECUTION_TIMEOUT_SECONDS_MIN);
         assert!(EXECUTION_TIMEOUT_SECONDS_DEFAULT <= EXECUTION_TIMEOUT_SECONDS_MAX);

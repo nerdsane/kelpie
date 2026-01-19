@@ -33,6 +33,12 @@ pub const MESSAGES_LOAD_LIMIT_DEFAULT: usize = 50;
 pub const MESSAGES_LOAD_LIMIT_MAX: usize = 1000;
 
 /// Maximum custom tool name length in bytes
+///
+/// NOTE: Existing tools (core memory tools) bypass this limit.
+/// Only custom/client tools are validated against TOOL_NAME_LENGTH_MAX
+#[allow(dead_code)]
+pub const TOOL_NAME_LENGTH_MAX: usize = 255;
+
 // =============================================================================
 // Agent Metadata
 // =============================================================================

@@ -284,7 +284,10 @@ impl AgentActor {
         const MAX_ITERATIONS: u32 = 5;
 
         // TigerStyle: Explicit limit enforcement
-        assert!(MAX_ITERATIONS > 0, "MAX_ITERATIONS must be positive");
+        #[allow(clippy::assertions_on_constants)]
+        {
+            assert!(MAX_ITERATIONS > 0, "MAX_ITERATIONS must be positive");
+        }
 
         // 5. Tool execution loop
         while !response.tool_calls.is_empty() && iterations < MAX_ITERATIONS {
