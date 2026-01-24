@@ -430,10 +430,13 @@ impl<RT: Runtime + 'static> RpcTransport for MemoryTransport<RT> {
         let local_node_id = self.node_id.clone();
 
         // Fire-and-forget background task
-        std::mem::drop(
-            self.runtime
-                .spawn(Self::process_messages(receiver, handler, pending, senders, local_node_id)),
-        );
+        std::mem::drop(self.runtime.spawn(Self::process_messages(
+            receiver,
+            handler,
+            pending,
+            senders,
+            local_node_id,
+        )));
 
         Ok(())
     }

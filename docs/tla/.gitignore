@@ -1,0 +1,6 @@
+# TLC model checker output
+states/
+*.st
+*.fp
+*.bin
+*_TTrace_*.tla
