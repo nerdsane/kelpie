@@ -657,12 +657,8 @@ mod tests {
         let migration_receiver = Arc::new(MockMigrationReceiver::new());
         migration_receiver.set_can_accept(false);
 
-        let handler = ClusterRpcHandler::new(
-            test_node_id(2),
-            registry,
-            invoker,
-            migration_receiver,
-        );
+        let handler =
+            ClusterRpcHandler::new(test_node_id(2), registry, invoker, migration_receiver);
 
         let msg = RpcMessage::MigratePrepare {
             request_id: 1,
