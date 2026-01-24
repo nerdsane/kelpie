@@ -114,8 +114,8 @@ References:
 
 ### Phase 7: Documentation and PR
 - [x] Create docs/tla/README.md
-- [ ] Commit and push
-- [ ] Create PR
+- [x] Commit and push
+- [x] Create PR
 
 ---
 
@@ -129,7 +129,7 @@ References:
 - [x] TLC verification passed
 - [x] Vision aligned
 - [x] **What to Try section updated**
-- [ ] Committed
+- [x] Committed
 
 ---
 
@@ -197,5 +197,5 @@ java -XX:+UseParallelGC -jar tla2tools.jar -deadlock -config KelpieMigration_Bug
 | Safe model check | `java -jar tla2tools.jar -deadlock -config KelpieMigration.cfg KelpieMigration.tla` | No errors, 238 states |
 | Buggy model check | `java -jar tla2tools.jar -deadlock -config KelpieMigration_Buggy.cfg KelpieMigration.tla` | MigrationAtomicity violated |
 
-**Commit:** (pending)
-**PR:** (pending)
+**Commit:** 665ee206bf61db7fe710ea2662507e1e4ff4d7a4
+**PR:** https://github.com/nerdsane/kelpie/pull/16
