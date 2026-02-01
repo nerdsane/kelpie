@@ -7,7 +7,7 @@
 //! - Partial write scenarios
 //! - Concurrent operations with faults
 
-use kelpie_core::Result;
+use kelpie_core::{Result, Runtime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -64,6 +64,8 @@ async fn test_create_agent_crash_after_write() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 };
 
                 // All creates should succeed since no storage writes during create
@@ -140,10 +142,12 @@ async fn test_delete_agent_atomicity_crash() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
                 };
-                match service.create_agent(request).await {
-                    Ok(agent) => agent_ids.push(agent.id),
-                    Err(_) => {} // Ignore creation failures
+                // Ignore creation failures
+                if let Ok(agent) = service.create_agent(request).await {
+                    agent_ids.push(agent.id);
                 }
             }
 
@@ -155,7 +159,9 @@ async fn test_delete_agent_atomicity_crash() {
                     Ok(_) => {
                         // CRITICAL: Verify it's actually deleted
                         // Wait a bit to allow deactivation to complete
-                        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                        kelpie_core::current_runtime()
+                            .sleep(std::time::Duration::from_millis(10))
+                            .await;
 
                         match service.get_agent(agent_id).await {
                             Ok(agent) => {
@@ -228,6 +234,8 @@ async fn test_update_agent_concurrent_with_faults() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
 
             let agent = match service.create_agent(request).await {
@@ -243,7 +251,7 @@ async fn test_update_agent_concurrent_with_faults() {
             for i in 0..5 {
                 let service_clone = service.clone();
                 let agent_id = agent.id.clone();
-                let handle = tokio::spawn(async move {
+                let handle = kelpie_core::current_runtime().spawn(async move {
                     let update = serde_json::json!({
                         "name": format!("update-{}", i),
                         "description": format!("Description from thread {}", i),
@@ -342,7 +350,9 @@ async fn test_agent_state_corruption() {
                 tool_ids: vec![],
                 tags: vec![],
                 metadata: serde_json::json!({"key": "value"}),
-                project_id: None,            };
+                project_id: None,
+                user_id: None,
+                org_id: None,            };
 
             let agent = match service.create_agent(request).await {
                 Ok(a) => a,
@@ -465,6 +475,8 @@ async fn test_send_message_crash_after_llm() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
 
             let agent = match service.create_agent(request).await {
@@ -646,7 +658,8 @@ impl LlmClient for SimLlmClientAdapter {
 }
 
 /// Create AgentService from simulation environment
-fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
+fn create_service(sim_env: &SimEnvironment) -> Result<AgentService<kelpie_core::CurrentRuntime>> {
+    use kelpie_core::Runtime;
     let sim_llm = SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone());
     let llm_adapter: Arc<dyn LlmClient> = Arc::new(SimLlmClientAdapter {
         client: Arc::new(sim_llm),
@@ -655,9 +668,14 @@ fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
     let factory = Arc::new(CloneFactory::new(actor));
     let kv = Arc::new(sim_env.storage.clone());
     let mut dispatcher =
-        Dispatcher::<AgentActor, AgentActorState>::new(factory, kv, DispatcherConfig::default());
+        Dispatcher::<AgentActor, AgentActorState, kelpie_core::CurrentRuntime>::new(
+            factory,
+            kv,
+            DispatcherConfig::default(),
+            kelpie_core::current_runtime(),
+        );
     let handle = dispatcher.handle();
-    tokio::spawn(async move {
+    let _dispatcher_handle = kelpie_core::current_runtime().spawn(async move {
         dispatcher.run().await;
     });
     Ok(AgentService::new(handle))

@@ -5,8 +5,8 @@
 use crate::error::{RegistryError, RegistryResult};
 use crate::node::NodeId;
 use kelpie_core::actor::ActorId;
+use kelpie_core::io::{TimeProvider, WallClockTime};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 
 /// Information about where an actor is placed
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,20 +24,16 @@ pub struct ActorPlacement {
 }
 
 impl ActorPlacement {
-    /// Create a new placement record
+    /// Create a new placement record using production wall clock
+    ///
+    /// For DST, use `with_timestamp` or `new_with_time`.
     pub fn new(actor_id: ActorId, node_id: NodeId) -> Self {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_millis() as u64;
+        Self::new_with_time(actor_id, node_id, &WallClockTime::new())
+    }
 
-        Self {
-            actor_id,
-            node_id,
-            activated_at_ms: now_ms,
-            updated_at_ms: now_ms,
-            generation: 1,
-        }
+    /// Create a new placement record with injected time provider (for DST)
+    pub fn new_with_time(actor_id: ActorId, node_id: NodeId, time: &dyn TimeProvider) -> Self {
+        Self::with_timestamp(actor_id, node_id, time.now_ms())
     }
 
     /// Create a placement with a specific timestamp (for testing/simulation)

@@ -9,16 +9,23 @@ on:
     - cron: '0 0 * * 0' # Weekly on Sundays
 
 jobs:
-  test-compatibility:
-    name: SDK Compatibility
+  # Core tests MUST pass - these are the essential Letta SDK operations
+  test-core:
+    name: Core SDK Tests (Must Pass)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       # Setup Rust
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      
+
+      # Install FDB client (required for compilation)
+      - name: Install FoundationDB client
+        run: |
+          wget -q https://github.com/apple/foundationdb/releases/download/7.3.27/foundationdb-clients_7.3.27-1_amd64.deb
+          sudo dpkg -i foundationdb-clients_7.3.27-1_amd64.deb
+
       # Build Kelpie Server
       - name: Build Kelpie Server
         run: cargo build --release -p kelpie-server
@@ -27,35 +34,146 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          
+
       # Install Letta SDK and dependencies
       - name: Install Letta SDK
         run: |
           pip install letta pytest
-      
-      # Run Server & Tests
-      - name: Run Compatibility Tests
+
+      # Run Server & Core Tests
+      - name: Run Core Compatibility Tests
         env:
-          ANTHROPIC_API_KEY: "sk-dummy-key" # Tests shouldn't hit real LLM APIs for basic CRUD
+          ANTHROPIC_API_KEY: "sk-dummy-key" # CRUD tests don't need real LLM
         run: |
           # Start server in background
           ./target/release/kelpie-server &
           SERVER_PID=$!
-          
+
           # Wait for health check
           timeout 30s bash -c 'until curl -s http://localhost:8283/health > /dev/null; do sleep 1; done'
-          
-          # Run tests
-          # We clone the letta repo to get their test suite
-          git clone https://github.com/letta-ai/letta.git letta-repo
-          
+
+          # Clone Letta repo for their test suite
+          git clone --depth 1 https://github.com/letta-ai/letta.git letta-repo
+
           export LETTA_SERVER_URL=http://localhost:8283
-          
-          # We only run the tests we know pass/are relevant (agents, blocks, tools, mcp)
-          # We exclude search/groups/identities which we know fail/skip
+
           cd letta-repo
           pip install -e ".[dev]"
-          pytest tests/sdk/agents_test.py tests/sdk/blocks_test.py tests/sdk/tools_test.py tests/sdk/mcp_servers_test.py -v
-          
+
+          # Core tests - these MUST pass
+          # agents, blocks, tools, mcp_servers are essential Letta operations
+          pytest tests/sdk/agents_test.py \
+                 tests/sdk/blocks_test.py \
+                 tests/sdk/tools_test.py \
+                 tests/sdk/mcp_servers_test.py \
+                 -v --tb=short
+
           # Cleanup
           kill $SERVER_PID
+
+  # Full test suite - reports compatibility but doesn't fail build
+  test-full-suite:
+    name: Full SDK Suite (Reporting Only)
+    runs-on: ubuntu-latest
+    # Don't fail the overall CI if this job fails
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      # Setup Rust
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Install FDB client (required for compilation)
+      - name: Install FoundationDB client
+        run: |
+          wget -q https://github.com/apple/foundationdb/releases/download/7.3.27/foundationdb-clients_7.3.27-1_amd64.deb
+          sudo dpkg -i foundationdb-clients_7.3.27-1_amd64.deb
+
+      # Build Kelpie Server
+      - name: Build Kelpie Server
+        run: cargo build --release -p kelpie-server
+
+      # Setup Python
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Install Letta SDK and dependencies
+      - name: Install Letta SDK
+        run: |
+          pip install letta pytest pytest-json-report
+
+      # Run Server & Full Tests
+      - name: Run Full Compatibility Tests
+        env:
+          ANTHROPIC_API_KEY: "sk-dummy-key"
+        run: |
+          # Start server in background
+          ./target/release/kelpie-server &
+          SERVER_PID=$!
+
+          # Wait for health check
+          timeout 30s bash -c 'until curl -s http://localhost:8283/health > /dev/null; do sleep 1; done'
+
+          # Clone Letta repo
+          git clone --depth 1 https://github.com/letta-ai/letta.git letta-repo
+
+          export LETTA_SERVER_URL=http://localhost:8283
+
+          cd letta-repo
+          pip install -e ".[dev]"
+
+          # Run FULL test suite with JSON report for analysis
+          pytest tests/sdk/ -v --tb=short \
+            --json-report --json-report-file=../letta-test-results.json \
+            || true
+
+          # Cleanup
+          kill $SERVER_PID
+
+      - name: Generate Compatibility Report
+        if: always()
+        run: |
+          if [ -f letta-test-results.json ]; then
+            echo "## Letta SDK Compatibility Report" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # Extract summary from JSON report
+            PASSED=$(jq '.summary.passed // 0' letta-test-results.json)
+            FAILED=$(jq '.summary.failed // 0' letta-test-results.json)
+            SKIPPED=$(jq '.summary.skipped // 0' letta-test-results.json)
+            TOTAL=$((PASSED + FAILED + SKIPPED))
+
+            echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| ✅ Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
+            echo "| ❌ Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
+            echo "| ⏭️ Skipped | $SKIPPED |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Total** | **$TOTAL** |" >> $GITHUB_STEP_SUMMARY
+
+            if [ "$TOTAL" -gt 0 ]; then
+              PERCENT=$((PASSED * 100 / TOTAL))
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "**Compatibility: ${PERCENT}%**" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            # List failed tests
+            if [ "$FAILED" -gt 0 ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "### Failed Tests" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              jq -r '.tests[] | select(.outcome == "failed") | .nodeid' letta-test-results.json >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "⚠️ No test results file found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: letta-test-results
+          path: letta-test-results.json
+          retention-days: 30

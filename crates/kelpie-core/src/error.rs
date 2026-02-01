@@ -135,6 +135,34 @@ pub enum Error {
     InvalidConfiguration { field: String, reason: String },
 
     // =========================================================================
+    // Generic Errors (for use by domain crates)
+    // =========================================================================
+    /// Generic resource not found error
+    ///
+    /// Use this for domain crates instead of duplicating NotFound variants.
+    #[error("{resource_type} not found: {resource_id}")]
+    NotFound {
+        resource_type: &'static str,
+        resource_id: String,
+    },
+
+    /// Generic timeout error
+    ///
+    /// Use this for domain crates instead of duplicating timeout variants.
+    #[error("operation timed out after {timeout_ms}ms: {operation}")]
+    Timeout { operation: String, timeout_ms: u64 },
+
+    /// Generic configuration error
+    ///
+    /// Use this for domain crates instead of duplicating config variants.
+    #[error("configuration error: {reason}")]
+    Config { reason: String },
+
+    /// IO error wrapper
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    // =========================================================================
     // Internal Errors
     // =========================================================================
     #[error("Internal error: {message}")]
@@ -191,6 +219,29 @@ impl Error {
         }
     }
 
+    /// Create a generic not found error
+    pub fn not_found(resource_type: &'static str, resource_id: impl Into<String>) -> Self {
+        Self::NotFound {
+            resource_type,
+            resource_id: resource_id.into(),
+        }
+    }
+
+    /// Create a generic timeout error
+    pub fn timeout(operation: impl Into<String>, timeout_ms: u64) -> Self {
+        Self::Timeout {
+            operation: operation.into(),
+            timeout_ms,
+        }
+    }
+
+    /// Create a generic configuration error
+    pub fn config(reason: impl Into<String>) -> Self {
+        Self::Config {
+            reason: reason.into(),
+        }
+    }
+
     /// Check if this error is retriable
     pub fn is_retriable(&self) -> bool {
         matches!(
@@ -198,6 +249,7 @@ impl Error {
             Self::TransactionConflict { .. }
                 | Self::NodeUnavailable { .. }
                 | Self::ActorInvocationTimeout { .. }
+                | Self::Timeout { .. }
         )
     }
 }

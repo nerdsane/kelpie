@@ -4,24 +4,27 @@
 //!
 //! DST Support: Optional fault injection for deterministic simulation testing.
 //!
-//! Storage Integration: Optional AgentStorage backend for persistence.
-//! When storage is configured, state is persisted to durable backend (FDB/Sim).
-//! In-memory HashMaps serve as hot cache, storage is source of truth.
+//! Storage Integration: AgentStorage backend is REQUIRED for all operations.
+//! Storage is the single source of truth - FDB for production, SimStorage for tests.
+//! In-memory HashMaps are deprecated and will be removed (Issue #74).
 
 use crate::actor::{AgentActor, RealLlmAdapter};
 use crate::llm::LlmClient;
 use crate::models::ArchivalEntry;
 use crate::models::{AgentGroup, AgentState, BatchStatus, Block, Job, Message, Project};
+use crate::security::audit::{new_shared_log, SharedAuditLog};
 use crate::service::AgentService;
-use crate::storage::{AgentStorage, StorageError};
+use crate::storage::{AgentStorage, SimStorage, StorageError};
 use crate::tools::UnifiedToolRegistry;
 use chrono::Utc;
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig, DispatcherHandle};
 use kelpie_storage::memory::MemoryKV;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use uuid::Uuid;
+
+use kelpie_core::io::{TimeProvider, WallClockTime};
 
 #[cfg(feature = "dst")]
 use kelpie_dst::fault::FaultInjector;
@@ -35,8 +38,17 @@ pub const MESSAGES_PER_AGENT_MAX: usize = 10_000;
 /// Maximum archival entries per agent
 pub const ARCHIVAL_ENTRIES_PER_AGENT_MAX: usize = 100_000;
 
-/// Maximum standalone blocks
-pub const BLOCKS_COUNT_MAX: usize = 100_000;
+/// Maximum standalone blocks (configurable via KELPIE_BLOCKS_COUNT_MAX env var)
+pub fn blocks_count_max() -> usize {
+    use std::sync::OnceLock;
+    static VALUE: OnceLock<usize> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        std::env::var("KELPIE_BLOCKS_COUNT_MAX")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100_000)
+    })
+}
 
 /// Tool information for API responses
 #[derive(Debug, Clone)]
@@ -55,19 +67,27 @@ pub struct ToolInfo {
     pub default_requires_approval: bool,
     /// Tool type: "builtin", "custom", "client"
     pub tool_type: String,
+    /// Tags for categorization (Letta compatibility)
+    pub tags: Option<Vec<String>>,
+    /// Character limit for return value (Letta compatibility)
+    pub return_char_limit: Option<u32>,
 }
 
 /// Server-wide shared state
 #[derive(Clone)]
-pub struct AppState {
-    inner: Arc<AppStateInner>,
+pub struct AppState<R: kelpie_core::Runtime> {
+    inner: Arc<AppStateInner<R>>,
 }
 
-struct AppStateInner {
+struct AppStateInner<R: kelpie_core::Runtime> {
     /// NEW Phase 5: Actor-based agent service (None for backward compat)
-    agent_service: Option<AgentService>,
+    agent_service: Option<AgentService<R>>,
     /// NEW Phase 5: Actor runtime dispatcher handle (None for backward compat)
-    dispatcher: Option<DispatcherHandle>,
+    dispatcher: Option<DispatcherHandle<R>>,
+    /// Runtime for spawning tasks
+    runtime: R,
+    /// Time provider for DST compatibility
+    time: Arc<dyn TimeProvider>,
     /// NEW Phase 5: Shutdown coordination channel
     shutdown_tx: Option<tokio::sync::broadcast::Sender<()>>,
 
@@ -94,12 +114,16 @@ struct AppStateInner {
     batches: RwLock<HashMap<String, crate::models::BatchStatus>>,
     /// Agent groups by ID (Phase 8)
     agent_groups: RwLock<HashMap<String, crate::models::AgentGroup>>,
-    /// Server start time for uptime calculation
-    start_time: Instant,
+    /// Identities by ID
+    identities: RwLock<HashMap<String, crate::models::Identity>>,
+    /// Audit log for forensics and compliance
+    audit_log: SharedAuditLog,
+    /// Server start time for uptime calculation (monotonic ms)
+    start_time_ms: u64,
     /// LLM client (None if no API key configured)
     llm: Option<LlmClient>,
-    /// Durable storage backend (None = in-memory only)
-    /// When present, state is persisted to storage (FDB/Sim)
+    /// Storage backend (always set - SimStorage for dev/tests, FDB for production)
+    /// Issue #74: Now always initialized - storage is single source of truth
     storage: Option<Arc<dyn AgentStorage>>,
     /// Prometheus metrics registry (None if metrics disabled or otel feature not enabled)
     #[cfg(feature = "otel")]
@@ -109,15 +133,15 @@ struct AppStateInner {
     fault_injector: Option<Arc<FaultInjector>>,
 }
 
-impl AppState {
-    /// Create new server state
-    pub fn new() -> Self {
-        Self::with_registry(None)
+impl<R: kelpie_core::Runtime + 'static> AppState<R> {
+    /// Create new server state with runtime
+    pub fn new(runtime: R) -> Self {
+        Self::with_registry(runtime, None)
     }
 
-    /// Create new server state with optional Prometheus registry
+    /// Create new server state with runtime and optional Prometheus registry
     #[cfg(feature = "otel")]
-    pub fn with_registry(registry: Option<&prometheus::Registry>) -> Self {
+    pub fn with_registry(runtime: R, registry: Option<&prometheus::Registry>) -> Self {
         let llm = LlmClient::from_env();
         if llm.is_some() {
             tracing::info!("LLM integration enabled");
@@ -128,6 +152,8 @@ impl AppState {
         }
 
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
+        let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
+        let audit_log = new_shared_log();
 
         // Phase 6.4: Create AgentService and Dispatcher for production
         let (agent_service, dispatcher, shutdown_tx) = if let Some(ref llm_client) = llm {
@@ -137,8 +163,9 @@ impl AppState {
             let llm_adapter: Arc<dyn crate::actor::LlmClient> =
                 Arc::new(RealLlmAdapter::new(llm_client.clone()));
 
-            // Create AgentActor
-            let actor = AgentActor::new(llm_adapter, tool_registry.clone());
+            // Create AgentActor with audit logging
+            let actor = AgentActor::new(llm_adapter, tool_registry.clone())
+                .with_audit_log(audit_log.clone());
 
             // Create CloneFactory for dispatcher
             let factory = Arc::new(CloneFactory::new(actor));
@@ -147,16 +174,21 @@ impl AppState {
             let kv = Arc::new(MemoryKV::new());
 
             // Create Dispatcher
-            let mut dispatcher = Dispatcher::new(factory, kv, DispatcherConfig::default());
+            let mut dispatcher =
+                Dispatcher::new(factory, kv, DispatcherConfig::default(), runtime.clone());
             let handle = dispatcher.handle();
 
             // Spawn dispatcher runtime
-            tokio::spawn(async move {
+            drop(runtime.spawn(async move {
                 dispatcher.run().await;
-            });
+            }));
 
             // Create service
-            let service = AgentService::new(handle.clone());
+            let service = AgentService::with_tool_registry_and_audit(
+                handle.clone(),
+                tool_registry.clone(),
+                audit_log.clone(),
+            );
 
             // Create shutdown channel
             let (tx, _rx) = tokio::sync::broadcast::channel(1);
@@ -167,10 +199,14 @@ impl AppState {
             (None, None, None)
         };
 
+        tracing::info!("Audit logging enabled");
+
         Self {
             inner: Arc::new(AppStateInner {
                 agent_service,
                 dispatcher,
+                runtime,
+                time: time.clone(),
                 shutdown_tx,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -183,9 +219,12 @@ impl AppState {
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
-                start_time: Instant::now(),
+                identities: RwLock::new(HashMap::new()),
+                audit_log,
+                start_time_ms: time.monotonic_ms(),
                 llm,
-                storage: None,
+                // Issue #74: Always create storage - SimStorage for in-memory mode
+                storage: Some(Arc::new(SimStorage::new())),
                 prometheus_registry: registry.map(|r| Arc::new(r.clone())),
                 #[cfg(feature = "dst")]
                 fault_injector: None,
@@ -195,7 +234,7 @@ impl AppState {
 
     /// Create new server state without Prometheus registry (when otel feature not enabled)
     #[cfg(not(feature = "otel"))]
-    pub fn with_registry(_registry: Option<()>) -> Self {
+    pub fn with_registry(runtime: R, _registry: Option<()>) -> Self {
         let llm = LlmClient::from_env();
         if llm.is_some() {
             tracing::info!("LLM integration enabled");
@@ -206,6 +245,8 @@ impl AppState {
         }
 
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
+        let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
+        let audit_log = new_shared_log();
 
         // Phase 6.4: Create AgentService and Dispatcher for production
         let (agent_service, dispatcher, shutdown_tx) = if let Some(ref llm_client) = llm {
@@ -215,8 +256,9 @@ impl AppState {
             let llm_adapter: Arc<dyn crate::actor::LlmClient> =
                 Arc::new(RealLlmAdapter::new(llm_client.clone()));
 
-            // Create AgentActor
-            let actor = AgentActor::new(llm_adapter, tool_registry.clone());
+            // Create AgentActor with audit logging
+            let actor = AgentActor::new(llm_adapter, tool_registry.clone())
+                .with_audit_log(audit_log.clone());
 
             // Create CloneFactory for dispatcher
             let factory = Arc::new(CloneFactory::new(actor));
@@ -225,16 +267,21 @@ impl AppState {
             let kv = Arc::new(MemoryKV::new());
 
             // Create Dispatcher
-            let mut dispatcher = Dispatcher::new(factory, kv, DispatcherConfig::default());
+            let mut dispatcher =
+                Dispatcher::new(factory, kv, DispatcherConfig::default(), runtime.clone());
             let handle = dispatcher.handle();
 
             // Spawn dispatcher runtime
-            tokio::spawn(async move {
+            drop(runtime.spawn(async move {
                 dispatcher.run().await;
-            });
+            }));
 
             // Create service
-            let service = AgentService::new(handle.clone());
+            let service = AgentService::with_tool_registry_and_audit(
+                handle.clone(),
+                tool_registry.clone(),
+                audit_log.clone(),
+            );
 
             // Create shutdown channel
             let (tx, _rx) = tokio::sync::broadcast::channel(1);
@@ -245,10 +292,14 @@ impl AppState {
             (None, None, None)
         };
 
+        tracing::info!("Audit logging enabled");
+
         Self {
             inner: Arc::new(AppStateInner {
                 agent_service,
                 dispatcher,
+                runtime,
+                time: time.clone(),
                 shutdown_tx,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -261,9 +312,12 @@ impl AppState {
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
-                start_time: Instant::now(),
+                identities: RwLock::new(HashMap::new()),
+                audit_log,
+                start_time_ms: time.monotonic_ms(),
                 llm,
-                storage: None,
+                // Issue #74: Always create storage - SimStorage for in-memory mode
+                storage: Some(Arc::new(SimStorage::new())),
                 #[cfg(feature = "dst")]
                 fault_injector: None,
             }),
@@ -273,15 +327,65 @@ impl AppState {
     /// Create server state with durable storage backend
     ///
     /// TigerStyle: Storage enables persistence for crash recovery.
-    pub fn with_storage(storage: Arc<dyn AgentStorage>) -> Self {
+    pub fn with_storage(runtime: R, storage: Arc<dyn AgentStorage>) -> Self {
         let llm = LlmClient::from_env();
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
+        let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
+        let audit_log = new_shared_log();
+
+        // Phase 6.4: Create AgentService and Dispatcher for production
+        let (agent_service, dispatcher, shutdown_tx) = if let Some(ref llm_client) = llm {
+            tracing::info!("Initializing actor-based agent service");
+
+            // Create LLM adapter for actor
+            let llm_adapter: Arc<dyn crate::actor::LlmClient> =
+                Arc::new(RealLlmAdapter::new(llm_client.clone()));
+
+            // Create AgentActor with audit logging
+            let actor = AgentActor::new(llm_adapter, tool_registry.clone())
+                .with_audit_log(audit_log.clone());
+
+            // Create CloneFactory for dispatcher
+            let factory = Arc::new(CloneFactory::new(actor));
+
+            // Use MemoryKV for actor storage (TODO: production will use FDB)
+            let kv = Arc::new(MemoryKV::new());
+
+            // Create Dispatcher
+            let mut dispatcher =
+                Dispatcher::new(factory, kv, DispatcherConfig::default(), runtime.clone());
+            let handle = dispatcher.handle();
+
+            // Spawn dispatcher runtime
+            drop(runtime.spawn(async move {
+                dispatcher.run().await;
+            }));
+
+            // Create service
+            let service = AgentService::with_tool_registry_and_audit(
+                handle.clone(),
+                tool_registry.clone(),
+                audit_log.clone(),
+            );
+
+            // Create shutdown channel
+            let (tx, _rx) = tokio::sync::broadcast::channel(1);
+
+            (Some(service), Some(handle), Some(tx))
+        } else {
+            tracing::warn!("Actor service disabled - no LLM client configured");
+            (None, None, None)
+        };
+
+        tracing::info!("Audit logging enabled");
 
         Self {
             inner: Arc::new(AppStateInner {
-                agent_service: None,
-                dispatcher: None,
-                shutdown_tx: None,
+                agent_service,
+                dispatcher,
+                runtime,
+                time: time.clone(),
+                shutdown_tx,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
                 tool_registry,
@@ -293,7 +397,9 @@ impl AppState {
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
-                start_time: Instant::now(),
+                identities: RwLock::new(HashMap::new()),
+                audit_log,
+                start_time_ms: time.monotonic_ms(),
                 llm,
                 storage: Some(storage),
                 #[cfg(feature = "otel")]
@@ -307,17 +413,68 @@ impl AppState {
     /// Create server state with persistent storage and prometheus registry
     #[cfg(feature = "otel")]
     pub fn with_storage_and_registry(
+        runtime: R,
         storage: Arc<dyn AgentStorage>,
         registry: Option<prometheus::Registry>,
     ) -> Self {
         let llm = LlmClient::from_env();
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
+        let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
+        let audit_log = new_shared_log();
+
+        // Phase 6.4: Create AgentService and Dispatcher for production (otel)
+        let (agent_service, dispatcher, shutdown_tx) = if let Some(ref llm_client) = llm {
+            tracing::info!("Initializing actor-based agent service (with otel)");
+
+            // Create LLM adapter for actor
+            let llm_adapter: Arc<dyn crate::actor::LlmClient> =
+                Arc::new(RealLlmAdapter::new(llm_client.clone()));
+
+            // Create AgentActor with audit logging
+            let actor = AgentActor::new(llm_adapter, tool_registry.clone())
+                .with_audit_log(audit_log.clone());
+
+            // Create CloneFactory for dispatcher
+            let factory = Arc::new(CloneFactory::new(actor));
+
+            // Use MemoryKV for actor storage (TODO: production will use FDB)
+            let kv = Arc::new(MemoryKV::new());
+
+            // Create Dispatcher
+            let mut dispatcher =
+                Dispatcher::new(factory, kv, DispatcherConfig::default(), runtime.clone());
+            let handle = dispatcher.handle();
+
+            // Spawn dispatcher runtime
+            drop(runtime.spawn(async move {
+                dispatcher.run().await;
+            }));
+
+            // Create service
+            let service = AgentService::with_tool_registry_and_audit(
+                handle.clone(),
+                tool_registry.clone(),
+                audit_log.clone(),
+            );
+
+            // Create shutdown channel
+            let (tx, _rx) = tokio::sync::broadcast::channel(1);
+
+            (Some(service), Some(handle), Some(tx))
+        } else {
+            tracing::warn!("Actor service disabled - no LLM client configured (otel mode)");
+            (None, None, None)
+        };
+
+        tracing::info!("Audit logging enabled");
 
         Self {
             inner: Arc::new(AppStateInner {
-                agent_service: None,
-                dispatcher: None,
-                shutdown_tx: None,
+                agent_service,
+                dispatcher,
+                runtime,
+                time: time.clone(),
+                shutdown_tx,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
                 tool_registry,
@@ -329,7 +486,9 @@ impl AppState {
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
-                start_time: Instant::now(),
+                identities: RwLock::new(HashMap::new()),
+                audit_log,
+                start_time_ms: time.monotonic_ms(),
                 llm,
                 storage: Some(storage),
                 prometheus_registry: registry.map(Arc::new),
@@ -340,13 +499,16 @@ impl AppState {
     }
 
     /// Create server state with an explicit LLM client (test helper)
-    pub fn with_llm(llm: LlmClient) -> Self {
+    pub fn with_llm(runtime: R, llm: LlmClient) -> Self {
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
+        let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
 
         Self {
             inner: Arc::new(AppStateInner {
                 agent_service: None,
                 dispatcher: None,
+                runtime,
+                time: time.clone(),
                 shutdown_tx: None,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -359,9 +521,11 @@ impl AppState {
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
-                start_time: Instant::now(),
+                identities: RwLock::new(HashMap::new()),
+                audit_log: new_shared_log(),
+                start_time_ms: time.monotonic_ms(),
                 llm: Some(llm),
-                storage: None,
+                storage: Some(Arc::new(SimStorage::new())),
                 #[cfg(feature = "otel")]
                 prometheus_registry: None,
                 #[cfg(feature = "dst")]
@@ -372,13 +536,16 @@ impl AppState {
 
     /// Create server state with fault injector for DST testing
     #[cfg(feature = "dst")]
-    pub fn with_fault_injector(fault_injector: Arc<FaultInjector>) -> Self {
+    pub fn with_fault_injector(runtime: R, fault_injector: Arc<FaultInjector>) -> Self {
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
+        let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
 
         Self {
             inner: Arc::new(AppStateInner {
                 agent_service: None,
                 dispatcher: None,
+                runtime,
+                time: time.clone(),
                 shutdown_tx: None,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -391,9 +558,11 @@ impl AppState {
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
-                start_time: Instant::now(),
+                identities: RwLock::new(HashMap::new()),
+                audit_log: new_shared_log(),
+                start_time_ms: time.monotonic_ms(),
                 llm: None,
-                storage: None,
+                storage: Some(Arc::new(SimStorage::new())),
                 #[cfg(feature = "otel")]
                 prometheus_registry: None,
                 fault_injector: Some(fault_injector),
@@ -404,15 +573,19 @@ impl AppState {
     /// Create server state with both storage and fault injector for DST testing
     #[cfg(feature = "dst")]
     pub fn with_storage_and_faults(
+        runtime: R,
         storage: Arc<dyn AgentStorage>,
         fault_injector: Arc<FaultInjector>,
     ) -> Self {
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
+        let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
 
         Self {
             inner: Arc::new(AppStateInner {
                 agent_service: None,
                 dispatcher: None,
+                runtime,
+                time: time.clone(),
                 shutdown_tx: None,
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -425,7 +598,9 @@ impl AppState {
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
-                start_time: Instant::now(),
+                identities: RwLock::new(HashMap::new()),
+                audit_log: new_shared_log(),
+                start_time_ms: time.monotonic_ms(),
                 llm: None,
                 storage: Some(storage),
                 #[cfg(feature = "otel")]
@@ -440,19 +615,27 @@ impl AppState {
     /// TigerStyle: This constructor enables actor-based agent management (Phase 5).
     ///
     /// # Arguments
+    /// * `runtime` - Runtime for spawning tasks
     /// * `agent_service` - Service layer for agent operations
     /// * `dispatcher` - Dispatcher handle for shutdown coordination
     ///
     /// Note: This constructor is used for DST testing and will eventually
     /// replace the HashMap-based constructors after Phase 6 migration.
-    pub fn with_agent_service(agent_service: AgentService, dispatcher: DispatcherHandle) -> Self {
+    pub fn with_agent_service(
+        runtime: R,
+        agent_service: AgentService<R>,
+        dispatcher: DispatcherHandle<R>,
+    ) -> Self {
         let tool_registry = Arc::new(UnifiedToolRegistry::new());
         let (shutdown_tx, _rx) = tokio::sync::broadcast::channel(1);
+        let time: Arc<dyn TimeProvider> = Arc::new(WallClockTime::new());
 
         Self {
             inner: Arc::new(AppStateInner {
                 agent_service: Some(agent_service),
                 dispatcher: Some(dispatcher),
+                runtime,
+                time: time.clone(),
                 shutdown_tx: Some(shutdown_tx),
                 agents: RwLock::new(HashMap::new()),
                 messages: RwLock::new(HashMap::new()),
@@ -465,9 +648,12 @@ impl AppState {
                 projects: RwLock::new(HashMap::new()),
                 batches: RwLock::new(HashMap::new()),
                 agent_groups: RwLock::new(HashMap::new()),
-                start_time: Instant::now(),
+                identities: RwLock::new(HashMap::new()),
+                audit_log: new_shared_log(),
+                start_time_ms: time.monotonic_ms(),
                 llm: None,
-                storage: None,
+                // Issue #74: Always create storage - SimStorage for tests
+                storage: Some(Arc::new(SimStorage::new())),
                 #[cfg(feature = "otel")]
                 prometheus_registry: None,
                 #[cfg(feature = "dst")]
@@ -480,7 +666,7 @@ impl AppState {
     ///
     /// Returns None if AppState was created without actor-based service.
     /// After Phase 6 migration, this will always return Some.
-    pub fn agent_service(&self) -> Option<&AgentService> {
+    pub fn agent_service(&self) -> Option<&AgentService<R>> {
         self.inner.agent_service.as_ref()
     }
 
@@ -500,7 +686,7 @@ impl AppState {
         }
 
         // Wait for in-flight requests (up to timeout)
-        tokio::time::sleep(timeout).await;
+        self.inner.runtime.sleep(timeout).await;
 
         // Shutdown dispatcher if present
         if let Some(dispatcher) = &self.inner.dispatcher {
@@ -535,9 +721,15 @@ impl AppState {
         &self.inner.tool_registry
     }
 
+    /// Get the audit log
+    pub fn audit_log(&self) -> &SharedAuditLog {
+        &self.inner.audit_log
+    }
+
     /// Get server uptime in seconds
     pub fn uptime_seconds(&self) -> u64 {
-        self.inner.start_time.elapsed().as_secs()
+        let now_ms = self.inner.time.monotonic_ms();
+        now_ms.saturating_sub(self.inner.start_time_ms) / 1000
     }
 
     /// Get reference to the Prometheus registry (if configured)
@@ -556,150 +748,203 @@ impl AppState {
         self.inner.storage.as_ref().map(|s| s.as_ref())
     }
 
-    // =========================================================================
-    // Dual-Mode Agent Operations (Phase 6.1)
-    // =========================================================================
-    //
-    // These methods delegate to AgentService if available, otherwise fall back
-    // to HashMap. This enables incremental migration of HTTP handlers.
-    //
-    // After Phase 6 migration completes, these will be removed and handlers
-    // will call agent_service() directly.
+    /// Get reference to the dispatcher handle (if configured)
+    /// TigerStyle: Needed for agent-to-agent communication (Issue #75)
+    pub fn dispatcher(&self) -> Option<&DispatcherHandle<R>> {
+        self.inner.dispatcher.as_ref()
+    }
 
-    /// Get an agent by ID (dual-mode)
+    // =========================================================================
+    // Async Agent Operations (Single Source of Truth)
+    // =========================================================================
+    //
+    // All operations require AgentService (actor system). No HashMap fallback.
+
+    /// Get an agent by ID
     ///
-    /// Phase 6.11: Prefers AgentService if available, falls back to HashMap.
+    /// Single source of truth: Requires AgentService (actor system).
     pub async fn get_agent_async(&self, id: &str) -> Result<Option<AgentState>, StateError> {
-        if let Some(service) = self.agent_service() {
-            match service.get_agent(id).await {
-                Ok(agent) => Ok(Some(agent)),
-                Err(kelpie_core::Error::ActorNotFound { .. }) => {
-                    // Actor not found is not an error, just means agent doesn't exist
-                    Ok(None)
-                }
-                Err(kelpie_core::Error::Internal { message })
-                    if message.contains("Agent not created") =>
-                {
-                    // Actor was activated but has no agent state (never called create)
-                    Ok(None)
-                }
-                Err(e) => Err(StateError::Internal {
-                    message: format!("Service error: {}", e),
-                }),
+        let service = self.agent_service().ok_or_else(|| StateError::Internal {
+            message: "AgentService not configured".to_string(),
+        })?;
+
+        match service.get_agent(id).await {
+            Ok(agent) => Ok(Some(agent)),
+            Err(kelpie_core::Error::ActorNotFound { .. }) => {
+                // Actor not found is not an error, just means agent doesn't exist
+                Ok(None)
             }
-        } else {
-            // Fallback to HashMap for backward compatibility
-            self.get_agent(id)
+            Err(kelpie_core::Error::Internal { message })
+                if message.contains("Agent not created") =>
+            {
+                // Actor was activated but has no agent state (never called create)
+                Ok(None)
+            }
+            Err(e) => Err(StateError::Internal {
+                message: format!("Service error: {}", e),
+            }),
         }
     }
 
-    /// Create an agent (dual-mode)
+    /// Create an agent (async)
     ///
-    /// Phase 6.11: Prefers AgentService if available, falls back to HashMap.
+    /// Single source of truth: Requires AgentService (actor system).
     pub async fn create_agent_async(
         &self,
         request: crate::models::CreateAgentRequest,
     ) -> Result<AgentState, StateError> {
-        if let Some(service) = self.agent_service() {
-            service
-                .create_agent(request)
-                .await
-                .map_err(|e| StateError::Internal {
-                    message: format!("Service error: {}", e),
-                })
-        } else {
-            // Fallback to HashMap for backward compatibility
-            // Use from_request to convert CreateAgentRequest to AgentState
-            #[allow(deprecated)]
-            let agent = AgentState::from_request(request);
-            #[allow(deprecated)]
-            self.create_agent(agent)
-        }
+        let service = self.agent_service().ok_or_else(|| StateError::Internal {
+            message: "AgentService not configured".to_string(),
+        })?;
+
+        // Single source of truth: Actor system handles all state
+        let agent = service
+            .create_agent(request)
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("Service error: {}", e),
+            })?;
+
+        Ok(agent)
     }
 
-    /// Update an agent (dual-mode)
+    /// Update an agent
     ///
-    /// Phase 6.11: Prefers AgentService if available, falls back to HashMap.
+    /// Single source of truth: Requires AgentService (actor system).
     pub async fn update_agent_async(
         &self,
         id: &str,
         update: serde_json::Value,
     ) -> Result<AgentState, StateError> {
-        if let Some(service) = self.agent_service() {
-            service
-                .update_agent(id, update)
-                .await
-                .map_err(|e| StateError::Internal {
-                    message: format!("Service error: {}", e),
-                })
-        } else {
-            // Fallback: For HashMap mode, parse update and apply manually
-            let update_req: crate::models::UpdateAgentRequest = serde_json::from_value(update)
-                .map_err(|e| StateError::Internal {
-                    message: format!("Failed to parse update: {}", e),
-                })?;
+        let service = self.agent_service().ok_or_else(|| StateError::Internal {
+            message: "AgentService not configured".to_string(),
+        })?;
 
-            // Apply update using closure-based update_agent
-            #[allow(deprecated)]
-            self.update_agent(id, |agent| {
-                if let Some(name) = update_req.name {
-                    agent.name = name;
-                }
-                if let Some(system) = update_req.system {
-                    agent.system = Some(system);
-                }
-                if let Some(description) = update_req.description {
-                    agent.description = Some(description);
-                }
-                if let Some(tags) = update_req.tags {
-                    agent.tags = tags;
-                }
-                if let Some(metadata) = update_req.metadata {
-                    agent.metadata = metadata;
-                }
-            })
-        }
+        // Single source of truth: Actor system handles all state
+        let agent = service
+            .update_agent(id, update)
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("Service error: {}", e),
+            })?;
+
+        Ok(agent)
     }
 
-    /// Delete an agent (dual-mode)
+    /// Delete an agent (async)
     ///
-    /// Phase 6.11: Prefers AgentService if available, falls back to HashMap.
+    /// Single source of truth: Requires AgentService (actor system).
     pub async fn delete_agent_async(&self, id: &str) -> Result<(), StateError> {
-        if let Some(service) = self.agent_service() {
-            service
-                .delete_agent(id)
-                .await
-                .map_err(|e| StateError::Internal {
-                    message: format!("Service error: {}", e),
-                })
-        } else {
-            // Fallback to HashMap for backward compatibility
-            self.delete_agent(id)
-        }
+        let service = self.agent_service().ok_or_else(|| StateError::Internal {
+            message: "AgentService not configured".to_string(),
+        })?;
+
+        // Single source of truth: Actor system handles deletion
+        service
+            .delete_agent(id)
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("Service error: {}", e),
+            })?;
+
+        Ok(())
     }
 
-    /// List agents (dual-mode)
+    /// List agents from durable storage
     ///
-    /// Phase 6.5: Currently always uses HashMap since AgentService doesn't have list support yet.
-    /// TODO: Implement registry/index infrastructure for actor-based list operations.
+    /// TigerStyle: Single source of truth - all data flows through storage.
+    /// Requires storage to be configured.
+    ///
+    /// # Arguments
+    /// * `limit` - Maximum number of agents to return
+    /// * `cursor` - Pagination cursor (agent ID to start after)
+    /// * `name_filter` - Optional exact name match filter (applied before pagination)
     pub async fn list_agents_async(
         &self,
         limit: usize,
         cursor: Option<&str>,
+        name_filter: Option<&str>,
     ) -> Result<(Vec<AgentState>, Option<String>), StateError> {
-        // TODO: When AgentService supports list operations (requires registry):
-        // if let Some(service) = self.agent_service() {
-        //     service.list_agents(limit, cursor).await...
-        // } else {
-        //     self.list_agents(limit, cursor)
-        // }
+        // Require storage - no HashMap fallback
+        let storage = self
+            .inner
+            .storage
+            .as_ref()
+            .ok_or_else(|| StateError::Internal {
+                message: "Storage not configured".to_string(),
+            })?;
 
-        // For now, always use HashMap (works in both modes)
-        self.list_agents(limit, cursor)
+        // Load all agents from storage
+        let agent_metadatas = storage
+            .list_agents()
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("Failed to list agents from storage: {}", e),
+            })?;
+
+        // Convert AgentMetadata to AgentState
+        let mut agents: Vec<AgentState> = Vec::with_capacity(agent_metadatas.len());
+        for metadata in agent_metadatas {
+            // Load blocks for each agent
+            let blocks =
+                storage
+                    .load_blocks(&metadata.id)
+                    .await
+                    .map_err(|e| StateError::Internal {
+                        message: format!("Failed to load blocks: {}", e),
+                    })?;
+
+            agents.push(AgentState {
+                id: metadata.id,
+                name: metadata.name,
+                agent_type: metadata.agent_type,
+                model: metadata.model,
+                embedding: metadata.embedding,
+                system: metadata.system,
+                description: metadata.description,
+                blocks,
+                tool_ids: metadata.tool_ids,
+                tags: metadata.tags,
+                metadata: metadata.metadata,
+                project_id: None, // TODO: Add project_id to AgentMetadata
+                user_id: None,    // TODO: Add user_id to AgentMetadata
+                org_id: None,     // TODO: Add org_id to AgentMetadata
+                created_at: metadata.created_at,
+                updated_at: metadata.updated_at,
+            });
+        }
+
+        // Sort by created_at descending (newest first)
+        agents.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+        // TigerStyle: Apply name filter BEFORE pagination to ensure correct results
+        if let Some(name) = name_filter {
+            agents.retain(|agent| agent.name == name);
+        }
+
+        // Apply cursor (skip until we find the cursor ID)
+        let start_idx = if let Some(cursor_id) = cursor {
+            agents
+                .iter()
+                .position(|a| a.id == cursor_id)
+                .map(|i| i + 1)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        // Paginate
+        let page: Vec<_> = agents.into_iter().skip(start_idx).take(limit + 1).collect();
+        let (items, next_cursor) = if page.len() > limit {
+            let items: Vec<_> = page.into_iter().take(limit).collect();
+            let next_cursor = items.last().map(|a| a.id.clone());
+            (items, next_cursor)
+        } else {
+            (page, None)
+        };
+
+        Ok((items, next_cursor))
     }
-
-    // Note: list_agents not yet implemented in AgentService
-    // For now, list handler will continue using HashMap directly
 
     // =========================================================================
     // Async Persistence Operations (for durable storage)
@@ -710,6 +955,8 @@ impl AppState {
     /// TigerStyle: Async operation for storage backend writes.
     /// Returns Ok(()) if no storage configured (in-memory only mode).
     pub async fn persist_agent(&self, agent: &AgentState) -> Result<(), StorageError> {
+        tracing::debug!(agent_id = %agent.id, name = %agent.name, "persist_agent called");
+
         if let Some(storage) = &self.inner.storage {
             use crate::storage::AgentMetadata;
 
@@ -727,10 +974,14 @@ impl AppState {
                 created_at: agent.created_at,
                 updated_at: agent.updated_at,
             };
+            tracing::debug!(agent_id = %agent.id, "calling storage.save_agent");
             storage.save_agent(&metadata).await?;
+            tracing::info!(agent_id = %agent.id, "agent metadata persisted to storage");
 
             // Also persist blocks
             storage.save_blocks(&agent.id, &agent.blocks).await?;
+        } else {
+            tracing::debug!(agent_id = %agent.id, "no storage configured, skipping persist");
         }
         Ok(())
     }
@@ -786,6 +1037,8 @@ impl AppState {
             system: metadata.system,
             description: metadata.description,
             project_id: None, // Phase 6: Projects not stored in legacy storage yet
+            user_id: None,    // TODO: Store user_id in AgentMetadata
+            org_id: None,     // TODO: Store org_id in AgentMetadata
             blocks,
             tool_ids: metadata.tool_ids,
             tags: metadata.tags,
@@ -794,10 +1047,7 @@ impl AppState {
             updated_at: metadata.updated_at,
         };
 
-        // Populate cache
-        if let Ok(mut agents) = self.inner.agents.write() {
-            agents.insert(agent.id.clone(), agent.clone());
-        }
+        // HashMap cache population removed - storage is single source of truth
 
         Ok(Some(agent))
     }
@@ -988,6 +1238,26 @@ impl AppState {
 
     /// Get agent count
     pub fn agent_count(&self) -> Result<usize, StateError> {
+        // TigerStyle: Read from storage when configured to maintain consistency
+        // In-memory count may be stale in dual-mode operation
+        if let Some(storage) = &self.inner.storage {
+            // Use blocking task to call async storage method
+            let storage = storage.clone();
+            let count = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async move {
+                    storage
+                        .list_agents()
+                        .await
+                        .map(|agents| agents.len())
+                        .map_err(|e| StateError::Internal {
+                            message: format!("Failed to count agents from storage: {}", e),
+                        })
+                })
+            })?;
+            return Ok(count);
+        }
+
+        // Fallback to in-memory count
         let agents = self
             .inner
             .agents
@@ -1249,6 +1519,31 @@ impl AppState {
         }
     }
 
+    /// Atomic append or create block
+    ///
+    /// Single source of truth: Requires AgentService (actor system).
+    ///
+    /// TigerStyle: Atomic operation prevents race between check and modification.
+    pub async fn append_or_create_block_by_label_async(
+        &self,
+        agent_id: &str,
+        label: &str,
+        content: &str,
+    ) -> Result<(), StateError> {
+        let service = self.agent_service().ok_or_else(|| StateError::Internal {
+            message: "AgentService not configured".to_string(),
+        })?;
+
+        // Use agent service (actor-based)
+        service
+            .core_memory_append(agent_id, label, content)
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("Service error: {}", e),
+            })?;
+        Ok(())
+    }
+
     // =========================================================================
     // Standalone block operations (for letta-code compatibility)
     // =========================================================================
@@ -1261,10 +1556,10 @@ impl AppState {
             .write()
             .map_err(|_| StateError::LockPoisoned)?;
 
-        if blocks.len() >= BLOCKS_COUNT_MAX {
+        if blocks.len() >= blocks_count_max() {
             return Err(StateError::LimitExceeded {
                 resource: "blocks",
-                limit: BLOCKS_COUNT_MAX,
+                limit: blocks_count_max(),
             });
         }
 
@@ -1428,6 +1723,39 @@ impl AppState {
         Ok(result)
     }
 
+    /// Add a message to an agent's history (async version with storage persistence)
+    ///
+    /// NOTE: For the actor-based flow, messages are stored in actor state via
+    /// handle_message_full operation. This method is kept for direct storage writes.
+    ///
+    /// Single source of truth: Writes to storage only. HashMap cache removed.
+    pub async fn add_message_async(
+        &self,
+        agent_id: &str,
+        message: Message,
+    ) -> Result<Message, StateError> {
+        // DST: Check for fault injection on message write
+        if self.should_inject_fault("message_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "message_write".to_string(),
+            });
+        }
+
+        // Single source of truth: Write to storage only
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .append_message(agent_id, &message)
+                .await
+                .map_err(|e| StateError::StorageError {
+                    message: format!("Failed to persist message: {}", e),
+                })?;
+        }
+
+        // HashMap writes removed - storage is single source of truth
+
+        Ok(message)
+    }
+
     /// List messages for an agent with pagination
     pub fn list_messages(
         &self,
@@ -1533,6 +1861,8 @@ impl AppState {
             source: Some("custom".to_string()),
             default_requires_approval: false,
             tool_type: "custom".to_string(),
+            tags: None,
+            return_char_limit: None,
         })
     }
 
@@ -1540,6 +1870,7 @@ impl AppState {
     ///
     /// This is the primary method for tool registration, supporting both
     /// server-side and client-side tools.
+    #[allow(clippy::too_many_arguments)]
     pub async fn upsert_tool(
         &self,
         id: String,
@@ -1549,6 +1880,8 @@ impl AppState {
         source: Option<String>,
         default_requires_approval: bool,
         tool_type: String,
+        tags: Option<Vec<String>>,
+        return_char_limit: Option<u32>,
     ) -> Result<ToolInfo, StateError> {
         if name.is_empty() {
             return Err(StateError::Internal {
@@ -1556,25 +1889,27 @@ impl AppState {
             });
         }
 
+        // TigerStyle: Construct ToolInfo once to avoid duplication
+        let tool_info = ToolInfo {
+            id,
+            name: name.clone(),
+            description: description.clone(),
+            input_schema: input_schema.clone(),
+            source: source.clone(),
+            default_requires_approval,
+            tool_type: tool_type.clone(),
+            tags,
+            return_char_limit,
+        };
+
         // For client-side tools, we store metadata but don't register executable code
         if tool_type == "client" || default_requires_approval {
-            // Store in a client tools registry (in-memory for now)
-            let tool_info = ToolInfo {
-                id: id.clone(),
-                name: name.clone(),
-                description: description.clone(),
-                input_schema: input_schema.clone(),
-                source: source.clone(),
-                default_requires_approval,
-                tool_type: tool_type.clone(),
-            };
-
             // Store in client tools map
             self.inner
                 .client_tools
                 .write()
                 .map_err(|_| StateError::LockPoisoned)?
-                .insert(name.clone(), tool_info.clone());
+                .insert(name, tool_info.clone());
 
             return Ok(tool_info);
         }
@@ -1583,9 +1918,9 @@ impl AppState {
         if let Some(source_code) = &source {
             self.tool_registry()
                 .register_custom_tool(
-                    name.clone(),
-                    description.clone(),
-                    input_schema.clone(),
+                    tool_info.name.clone(),
+                    description,
+                    input_schema,
                     source_code.clone(),
                     "python".to_string(),
                     vec![],
@@ -1594,12 +1929,12 @@ impl AppState {
 
             // Persist to durable storage (if configured)
             if let Some(storage) = &self.inner.storage {
-                tracing::info!(name = %name, "persisting custom tool to storage");
+                tracing::info!(name = %tool_info.name, "persisting custom tool to storage");
                 let now = chrono::Utc::now();
                 let record = crate::storage::CustomToolRecord {
-                    name: name.clone(),
-                    description: description.clone(),
-                    input_schema: input_schema.clone(),
+                    name: tool_info.name.clone(),
+                    description: tool_info.description.clone(),
+                    input_schema: tool_info.input_schema.clone(),
                     source_code: source_code.clone(),
                     runtime: "python".to_string(),
                     requirements: vec![],
@@ -1607,33 +1942,25 @@ impl AppState {
                     updated_at: now,
                 };
                 match storage.save_custom_tool(&record).await {
-                    Ok(_) => tracing::info!(name = %name, "custom tool persisted successfully"),
+                    Ok(_) => {
+                        tracing::info!(name = %tool_info.name, "custom tool persisted successfully")
+                    }
                     Err(e) => {
-                        tracing::warn!(name = %name, error = %e, "failed to persist custom tool to storage")
+                        tracing::warn!(name = %tool_info.name, error = %e, "failed to persist custom tool to storage")
                     }
                 }
             } else {
-                tracing::debug!(name = %name, "no storage configured, custom tool not persisted");
+                tracing::debug!(name = %tool_info.name, "no storage configured, custom tool not persisted");
             }
         }
 
         // Store the tool info in client_tools map for ID-based lookup
         // This allows get_tool_by_id to work for all tool types
-        let tool_info = ToolInfo {
-            id: id.clone(),
-            name: name.clone(),
-            description: description.clone(),
-            input_schema: input_schema.clone(),
-            source: source.clone(),
-            default_requires_approval,
-            tool_type: tool_type.clone(),
-        };
-
         self.inner
             .client_tools
             .write()
             .map_err(|_| StateError::LockPoisoned)?
-            .insert(name.clone(), tool_info.clone());
+            .insert(name, tool_info.clone());
 
         Ok(tool_info)
     }
@@ -1657,6 +1984,8 @@ impl AppState {
             source: Some(tool.source.to_string()),
             default_requires_approval: false,
             tool_type: tool.source.to_string(),
+            tags: None,
+            return_char_limit: None,
         })
     }
 
@@ -1671,8 +2000,25 @@ impl AppState {
             }
         }
 
-        // For now, we can't look up registered tools by ID
-        // This would require maintaining an ID mapping
+        // Check registered tools using deterministic IDs
+        let tools = self.tool_registry().list_registered_tools().await;
+        for tool in tools {
+            let tool_id = Self::tool_name_to_uuid(&tool.definition.name).to_string();
+            if tool_id == id {
+                return Some(ToolInfo {
+                    id: tool_id,
+                    name: tool.definition.name,
+                    description: tool.definition.description,
+                    input_schema: tool.definition.input_schema,
+                    source: Some(tool.source.to_string()),
+                    default_requires_approval: false,
+                    tool_type: tool.source.to_string(),
+                    tags: None,
+                    return_char_limit: None,
+                });
+            }
+        }
+
         None
     }
 
@@ -1693,29 +2039,52 @@ impl AppState {
                 continue;
             }
             result.push(ToolInfo {
-                id: uuid::Uuid::new_v4().to_string(),
+                // Use deterministic UUID based on tool name for stable pagination
+                id: Self::tool_name_to_uuid(&tool.definition.name).to_string(),
                 name: tool.definition.name,
                 description: tool.definition.description,
                 input_schema: tool.definition.input_schema,
                 source: Some(tool.source.to_string()),
                 default_requires_approval: false,
                 tool_type: tool.source.to_string(),
+                tags: None,
+                return_char_limit: None,
             });
         }
 
         result
     }
 
+    /// Generate a deterministic UUID from a tool name
+    /// Uses UUID v5 (name-based with SHA-1) to ensure the same name always produces the same ID
+    fn tool_name_to_uuid(name: &str) -> uuid::Uuid {
+        // Use the DNS namespace as a standard namespace
+        uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, name.as_bytes())
+    }
+
     /// Delete a tool
     pub async fn delete_tool(&self, name: &str) -> Result<(), StateError> {
-        let removed = self.tool_registry().unregister(name).await;
-        if !removed {
+        // Try to remove from tool registry
+        let removed_from_registry = self.tool_registry().unregister(name).await;
+
+        // Try to remove from client tools
+        let removed_from_client = self
+            .inner
+            .client_tools
+            .write()
+            .map_err(|_| StateError::LockPoisoned)?
+            .remove(name)
+            .is_some();
+
+        // Tool must exist in at least one location
+        if !removed_from_registry && !removed_from_client {
             return Err(StateError::NotFound {
                 resource: "tool",
                 id: name.to_string(),
             });
         }
 
+        // Remove from persistent storage if configured
         if let Some(storage) = &self.inner.storage {
             let _ = storage.delete_custom_tool(name).await;
         }
@@ -1805,6 +2174,146 @@ impl AppState {
         Ok(())
     }
 
+    /// Load MCP servers from storage into the in-memory state
+    ///
+    /// Called on server startup to restore persisted MCP servers.
+    pub async fn load_mcp_servers_from_storage(&self) -> Result<(), StateError> {
+        let Some(storage) = &self.inner.storage else {
+            return Ok(());
+        };
+
+        let servers = storage
+            .list_mcp_servers()
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("storage error: {}", e),
+            })?;
+
+        let count = servers.len();
+        for server in servers {
+            self.inner
+                .mcp_servers
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?
+                .insert(server.id.clone(), server);
+        }
+
+        tracing::info!(count = count, "loaded MCP servers from storage");
+        Ok(())
+    }
+
+    /// Load agent groups from storage into the in-memory state
+    ///
+    /// Called on server startup to restore persisted agent groups.
+    pub async fn load_agent_groups_from_storage(&self) -> Result<(), StateError> {
+        let Some(storage) = &self.inner.storage else {
+            return Ok(());
+        };
+
+        let groups = storage
+            .list_agent_groups()
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("storage error: {}", e),
+            })?;
+
+        let count = groups.len();
+        for group in groups {
+            self.inner
+                .agent_groups
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?
+                .insert(group.id.clone(), group);
+        }
+
+        tracing::info!(count = count, "loaded agent groups from storage");
+        Ok(())
+    }
+
+    /// Load identities from storage into the in-memory state
+    ///
+    /// Called on server startup to restore persisted identities.
+    pub async fn load_identities_from_storage(&self) -> Result<(), StateError> {
+        let Some(storage) = &self.inner.storage else {
+            return Ok(());
+        };
+
+        let identities = storage
+            .list_identities()
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("storage error: {}", e),
+            })?;
+
+        let count = identities.len();
+        for identity in identities {
+            self.inner
+                .identities
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?
+                .insert(identity.id.clone(), identity);
+        }
+
+        tracing::info!(count = count, "loaded identities from storage");
+        Ok(())
+    }
+
+    /// Load projects from storage into the in-memory state
+    ///
+    /// Called on server startup to restore persisted projects.
+    pub async fn load_projects_from_storage(&self) -> Result<(), StateError> {
+        let Some(storage) = &self.inner.storage else {
+            return Ok(());
+        };
+
+        let projects = storage
+            .list_projects()
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("storage error: {}", e),
+            })?;
+
+        let count = projects.len();
+        for project in projects {
+            self.inner
+                .projects
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?
+                .insert(project.id.clone(), project);
+        }
+
+        tracing::info!(count = count, "loaded projects from storage");
+        Ok(())
+    }
+
+    /// Load jobs from storage into the in-memory state
+    ///
+    /// Called on server startup to restore persisted jobs.
+    pub async fn load_jobs_from_storage(&self) -> Result<(), StateError> {
+        let Some(storage) = &self.inner.storage else {
+            return Ok(());
+        };
+
+        let jobs = storage
+            .list_jobs()
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("storage error: {}", e),
+            })?;
+
+        let count = jobs.len();
+        for job in jobs {
+            self.inner
+                .jobs
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?
+                .insert(job.id.clone(), job);
+        }
+
+        tracing::info!(count = count, "loaded jobs from storage");
+        Ok(())
+    }
+
     // =========================================================================
     // Archival memory operations
     // =========================================================================
@@ -1829,12 +2338,10 @@ impl AppState {
             .write()
             .map_err(|_| StateError::LockPoisoned)?;
 
+        // Auto-create archival storage for agent if it doesn't exist yet
         let entries = archival
-            .get_mut(agent_id)
-            .ok_or_else(|| StateError::NotFound {
-                resource: "agent",
-                id: agent_id.to_string(),
-            })?;
+            .entry(agent_id.to_string())
+            .or_insert_with(Vec::new);
 
         if entries.len() >= ARCHIVAL_ENTRIES_PER_AGENT_MAX {
             return Err(StateError::LimitExceeded {
@@ -1875,10 +2382,11 @@ impl AppState {
             .read()
             .map_err(|_| StateError::LockPoisoned)?;
 
-        let entries = archival.get(agent_id).ok_or_else(|| StateError::NotFound {
-            resource: "agent",
-            id: agent_id.to_string(),
-        })?;
+        // Return empty list if agent has no archival entries yet (not an error)
+        let entries = match archival.get(agent_id) {
+            Some(e) => e,
+            None => return Ok(Vec::new()),
+        };
 
         // Simple text search if query is provided
         let results: Vec<_> = if let Some(q) = query {
@@ -2310,27 +2818,41 @@ impl AppState {
     // =========================================================================
 
     /// Add a new agent group
-    pub fn add_agent_group(&self, group: AgentGroup) -> Result<(), StateError> {
+    pub async fn add_agent_group(&self, group: AgentGroup) -> Result<(), StateError> {
         if self.should_inject_fault("agent_group_write").is_some() {
             return Err(StateError::FaultInjected {
                 operation: "agent_group_write".to_string(),
             });
         }
 
-        let mut groups = self
-            .inner
-            .agent_groups
-            .write()
-            .map_err(|_| StateError::LockPoisoned)?;
+        // Update in-memory state (lock scope ensures guard is dropped before await)
+        {
+            let mut groups = self
+                .inner
+                .agent_groups
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?;
 
-        if groups.contains_key(&group.id) {
-            return Err(StateError::AlreadyExists {
-                resource: "agent_group",
-                id: group.id.clone(),
-            });
+            if groups.contains_key(&group.id) {
+                return Err(StateError::AlreadyExists {
+                    resource: "agent_group",
+                    id: group.id.clone(),
+                });
+            }
+
+            groups.insert(group.id.clone(), group.clone());
+        } // Lock dropped here
+
+        // Persist to storage if configured
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .save_agent_group(&group)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("storage error: {}", e),
+                })?;
         }
 
-        groups.insert(group.id.clone(), group);
         Ok(())
     }
 
@@ -2387,58 +2909,262 @@ impl AppState {
     }
 
     /// Update an agent group
-    pub fn update_agent_group(&self, group: AgentGroup) -> Result<(), StateError> {
+    pub async fn update_agent_group(&self, group: AgentGroup) -> Result<(), StateError> {
         if self.should_inject_fault("agent_group_write").is_some() {
             return Err(StateError::FaultInjected {
                 operation: "agent_group_write".to_string(),
             });
         }
 
-        let mut groups = self
-            .inner
-            .agent_groups
-            .write()
-            .map_err(|_| StateError::LockPoisoned)?;
+        // Update in-memory state (lock scope ensures guard is dropped before await)
+        {
+            let mut groups = self
+                .inner
+                .agent_groups
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?;
 
-        if !groups.contains_key(&group.id) {
-            return Err(StateError::NotFound {
-                resource: "agent_group",
-                id: group.id.clone(),
-            });
+            if !groups.contains_key(&group.id) {
+                return Err(StateError::NotFound {
+                    resource: "agent_group",
+                    id: group.id.clone(),
+                });
+            }
+
+            groups.insert(group.id.clone(), group.clone());
+        } // Lock dropped here
+
+        // Persist to storage if configured
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .save_agent_group(&group)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("storage error: {}", e),
+                })?;
         }
 
-        groups.insert(group.id.clone(), group);
         Ok(())
     }
 
     /// Delete an agent group
-    pub fn delete_agent_group(&self, group_id: &str) -> Result<(), StateError> {
+    pub async fn delete_agent_group(&self, group_id: &str) -> Result<(), StateError> {
         if self.should_inject_fault("agent_group_write").is_some() {
             return Err(StateError::FaultInjected {
                 operation: "agent_group_write".to_string(),
             });
         }
 
-        let mut groups = self
+        // Update in-memory state (lock scope ensures guard is dropped before await)
+        {
+            let mut groups = self
+                .inner
+                .agent_groups
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?;
+
+            if groups.remove(group_id).is_none() {
+                return Err(StateError::NotFound {
+                    resource: "agent_group",
+                    id: group_id.to_string(),
+                });
+            }
+        } // Lock dropped here
+
+        // Persist deletion to storage if configured
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .delete_agent_group(group_id)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("storage error: {}", e),
+                })?;
+        }
+
+        Ok(())
+    }
+
+    // =========================================================================
+    // Identities
+    // =========================================================================
+
+    /// Add a new identity
+    pub async fn add_identity(&self, identity: crate::models::Identity) -> Result<(), StateError> {
+        if self.should_inject_fault("identity_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "identity_write".to_string(),
+            });
+        }
+
+        // Update in-memory state (lock scope ensures guard is dropped before await)
+        {
+            let mut identities = self
+                .inner
+                .identities
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?;
+
+            if identities.contains_key(&identity.id) {
+                return Err(StateError::AlreadyExists {
+                    resource: "identity",
+                    id: identity.id.clone(),
+                });
+            }
+
+            identities.insert(identity.id.clone(), identity.clone());
+        } // Lock dropped here
+
+        // Persist to storage if configured
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .save_identity(&identity)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("storage error: {}", e),
+                })?;
+        }
+
+        Ok(())
+    }
+
+    /// Get identity by ID
+    pub fn get_identity(
+        &self,
+        identity_id: &str,
+    ) -> Result<Option<crate::models::Identity>, StateError> {
+        if self.should_inject_fault("identity_read").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "identity_read".to_string(),
+            });
+        }
+
+        let identities = self
             .inner
-            .agent_groups
-            .write()
+            .identities
+            .read()
+            .map_err(|_| StateError::LockPoisoned)?;
+        Ok(identities.get(identity_id).cloned())
+    }
+
+    /// List identities with pagination
+    pub fn list_identities(
+        &self,
+        cursor: Option<&str>,
+    ) -> Result<(Vec<crate::models::Identity>, Option<String>), StateError> {
+        if self.should_inject_fault("identity_read").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "identity_read".to_string(),
+            });
+        }
+
+        let identities = self
+            .inner
+            .identities
+            .read()
             .map_err(|_| StateError::LockPoisoned)?;
 
-        if groups.remove(group_id).is_none() {
-            return Err(StateError::NotFound {
-                resource: "agent_group",
-                id: group_id.to_string(),
+        let mut all_identities: Vec<_> = identities.values().cloned().collect();
+        all_identities.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+        let start_idx = if let Some(cursor_id) = cursor {
+            all_identities
+                .iter()
+                .position(|i| i.id == cursor_id)
+                .map(|idx| idx + 1)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        let remaining: Vec<_> = all_identities.into_iter().skip(start_idx).collect();
+        let next_cursor = remaining.last().map(|i| i.id.clone());
+
+        Ok((remaining, next_cursor))
+    }
+
+    /// Update an identity
+    pub async fn update_identity(
+        &self,
+        identity: crate::models::Identity,
+    ) -> Result<(), StateError> {
+        if self.should_inject_fault("identity_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "identity_write".to_string(),
             });
+        }
+
+        // Update in-memory state (lock scope ensures guard is dropped before await)
+        {
+            let mut identities = self
+                .inner
+                .identities
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?;
+
+            if !identities.contains_key(&identity.id) {
+                return Err(StateError::NotFound {
+                    resource: "identity",
+                    id: identity.id.clone(),
+                });
+            }
+
+            identities.insert(identity.id.clone(), identity.clone());
+        } // Lock dropped here
+
+        // Persist to storage if configured
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .save_identity(&identity)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("storage error: {}", e),
+                })?;
+        }
+
+        Ok(())
+    }
+
+    /// Delete an identity
+    pub async fn delete_identity(&self, identity_id: &str) -> Result<(), StateError> {
+        if self.should_inject_fault("identity_write").is_some() {
+            return Err(StateError::FaultInjected {
+                operation: "identity_write".to_string(),
+            });
+        }
+
+        // Update in-memory state (lock scope ensures guard is dropped before await)
+        {
+            let mut identities = self
+                .inner
+                .identities
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?;
+
+            if identities.remove(identity_id).is_none() {
+                return Err(StateError::NotFound {
+                    resource: "identity",
+                    id: identity_id.to_string(),
+                });
+            }
+        } // Lock dropped here
+
+        // Persist deletion to storage if configured
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .delete_identity(identity_id)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("storage error: {}", e),
+                })?;
         }
 
         Ok(())
     }
 }
 
-impl Default for AppState {
+impl Default for AppState<kelpie_core::TokioRuntime> {
     fn default() -> Self {
-        Self::new()
+        Self::new(kelpie_core::TokioRuntime)
     }
 }
 
@@ -2460,6 +3186,8 @@ pub enum StateError {
     FaultInjected { operation: String },
     /// Internal error (service errors, etc.)
     Internal { message: String },
+    /// Storage error (from AgentStorage operations)
+    StorageError { message: String },
 }
 
 impl std::fmt::Display for StateError {
@@ -2481,6 +3209,9 @@ impl std::fmt::Display for StateError {
             StateError::Internal { message } => {
                 write!(f, "internal error: {}", message)
             }
+            StateError::StorageError { message } => {
+                write!(f, "storage error: {}", message)
+            }
         }
     }
 }
@@ -2491,7 +3222,7 @@ impl std::error::Error for StateError {}
 // MCP Server Management (Letta Compatibility)
 // =============================================================================
 
-impl AppState {
+impl<R: kelpie_core::Runtime> AppState<R> {
     /// Create a new MCP server
     pub async fn create_mcp_server(
         &self,
@@ -2500,14 +3231,27 @@ impl AppState {
     ) -> Result<crate::models::MCPServer, StateError> {
         let server = crate::models::MCPServer::new(server_name, config);
 
-        let server_id = server.id.clone();
-        self.inner
-            .mcp_servers
-            .write()
-            .map_err(|_| StateError::LockPoisoned)?
-            .insert(server_id.clone(), server.clone());
+        // Update in-memory state (lock scope ensures guard is dropped before await)
+        {
+            let server_id = server.id.clone();
+            self.inner
+                .mcp_servers
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?
+                .insert(server_id.clone(), server.clone());
+        } // Lock dropped here
 
-        tracing::debug!(server_id = %server_id, "Created MCP server");
+        // Persist to storage if configured
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .save_mcp_server(&server)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("storage error: {}", e),
+                })?;
+        }
+
+        tracing::debug!(server_id = %server.id, "Created MCP server");
         Ok(server)
     }
 
@@ -2532,48 +3276,111 @@ impl AppState {
         server_name: Option<String>,
         config: Option<crate::models::MCPServerConfig>,
     ) -> Result<crate::models::MCPServer, StateError> {
-        let mut servers = self
-            .inner
-            .mcp_servers
-            .write()
-            .map_err(|_| StateError::LockPoisoned)?;
+        let updated_server = {
+            let mut servers = self
+                .inner
+                .mcp_servers
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?;
 
-        let server = servers
-            .get_mut(server_id)
-            .ok_or_else(|| StateError::NotFound {
-                resource: "MCP server",
-                id: server_id.to_string(),
-            })?;
+            let server = servers
+                .get_mut(server_id)
+                .ok_or_else(|| StateError::NotFound {
+                    resource: "MCP server",
+                    id: server_id.to_string(),
+                })?;
 
-        if let Some(name) = server_name {
-            server.server_name = name;
+            if let Some(name) = server_name {
+                server.server_name = name;
+            }
+            if let Some(cfg) = config {
+                server.config = cfg;
+            }
+            server.updated_at = chrono::Utc::now();
+
+            server.clone()
+        };
+
+        // Persist to storage if configured
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .save_mcp_server(&updated_server)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("storage error: {}", e),
+                })?;
         }
-        if let Some(cfg) = config {
-            server.config = cfg;
-        }
-        server.updated_at = chrono::Utc::now();
 
         tracing::debug!(server_id = %server_id, "Updated MCP server");
-        Ok(server.clone())
+        Ok(updated_server)
     }
 
     /// Delete an MCP server
     pub async fn delete_mcp_server(&self, server_id: &str) -> Result<(), StateError> {
-        let mut servers = self
-            .inner
-            .mcp_servers
-            .write()
-            .map_err(|_| StateError::LockPoisoned)?;
+        // Update in-memory state (lock scope ensures guard is dropped before await)
+        {
+            let mut servers = self
+                .inner
+                .mcp_servers
+                .write()
+                .map_err(|_| StateError::LockPoisoned)?;
 
-        servers
-            .remove(server_id)
-            .ok_or_else(|| StateError::NotFound {
-                resource: "MCP server",
-                id: server_id.to_string(),
-            })?;
+            servers
+                .remove(server_id)
+                .ok_or_else(|| StateError::NotFound {
+                    resource: "MCP server",
+                    id: server_id.to_string(),
+                })?;
+        } // Lock dropped here
+
+        // Persist deletion to storage if configured
+        if let Some(storage) = &self.inner.storage {
+            storage
+                .delete_mcp_server(server_id)
+                .await
+                .map_err(|e| StateError::Internal {
+                    message: format!("storage error: {}", e),
+                })?;
+        }
 
         tracing::debug!(server_id = %server_id, "Deleted MCP server");
         Ok(())
+    }
+
+    // =========================================================================
+    // MCP Config Helpers (DRY - reduce cognitive complexity)
+    // =========================================================================
+
+    /// Convert MCPServerConfig to McpConfig
+    ///
+    /// TigerStyle: Single responsibility - converts between config types.
+    /// Reduces nesting depth by extracting repeated match logic.
+    /// Public to allow reuse in mcp_servers API module.
+    pub fn mcp_server_config_to_mcp_config(
+        server_name: &str,
+        config: &crate::models::MCPServerConfig,
+    ) -> kelpie_tools::mcp::McpConfig {
+        use kelpie_tools::mcp::McpConfig;
+
+        match config {
+            crate::models::MCPServerConfig::Stdio { command, args, env } => {
+                let mut mcp_config = McpConfig::stdio(server_name, command, args.clone());
+                if let Some(env_map) = env {
+                    for (k, v) in env_map {
+                        if let Some(v_str) = v.as_str() {
+                            mcp_config = mcp_config.with_env(k.clone(), v_str.to_string());
+                        }
+                    }
+                }
+                mcp_config
+            }
+            crate::models::MCPServerConfig::Sse { server_url, .. } => {
+                McpConfig::sse(server_name, server_url)
+            }
+            crate::models::MCPServerConfig::StreamableHttp { server_url, .. } => {
+                McpConfig::http(server_name, server_url)
+            }
+        }
     }
 
     /// List tools provided by an MCP server
@@ -2583,7 +3390,7 @@ impl AppState {
         &self,
         server_id: &str,
     ) -> Result<Vec<serde_json::Value>, StateError> {
-        use kelpie_tools::mcp::{McpClient, McpConfig};
+        use kelpie_tools::mcp::McpClient;
         use std::sync::Arc;
 
         // Get the MCP server
@@ -2595,26 +3402,8 @@ impl AppState {
                 id: server_id.to_string(),
             })?;
 
-        // Convert MCPServerConfig to McpConfig
-        let mcp_config = match &server.config {
-            crate::models::MCPServerConfig::Stdio { command, args, env } => {
-                let mut config = McpConfig::stdio(&server.server_name, command, args.clone());
-                if let Some(env_map) = env {
-                    for (k, v) in env_map {
-                        if let Some(v_str) = v.as_str() {
-                            config = config.with_env(k.clone(), v_str.to_string());
-                        }
-                    }
-                }
-                config
-            }
-            crate::models::MCPServerConfig::Sse { server_url, .. } => {
-                McpConfig::sse(&server.server_name, server_url)
-            }
-            crate::models::MCPServerConfig::StreamableHttp { server_url, .. } => {
-                McpConfig::http(&server.server_name, server_url)
-            }
-        };
+        // Convert MCPServerConfig to McpConfig using helper
+        let mcp_config = Self::mcp_server_config_to_mcp_config(&server.server_name, &server.config);
 
         // Create MCP client
         let client = Arc::new(McpClient::new(mcp_config));
@@ -2653,6 +3442,50 @@ impl AppState {
 
         Ok(tool_responses)
     }
+
+    /// Execute a tool on an MCP server
+    pub async fn execute_mcp_server_tool(
+        &self,
+        server_id: &str,
+        tool_name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<serde_json::Value, StateError> {
+        use kelpie_tools::mcp::McpClient;
+        use std::sync::Arc;
+
+        // Get the MCP server
+        let server = self
+            .get_mcp_server(server_id)
+            .await
+            .ok_or_else(|| StateError::NotFound {
+                resource: "MCP server",
+                id: server_id.to_string(),
+            })?;
+
+        // Convert MCPServerConfig to McpConfig using helper
+        let mcp_config = Self::mcp_server_config_to_mcp_config(&server.server_name, &server.config);
+
+        // Create MCP client
+        let client = Arc::new(McpClient::new(mcp_config));
+
+        // Connect to the server
+        client.connect().await.map_err(|e| StateError::Internal {
+            message: format!("Failed to connect to MCP server: {}", e),
+        })?;
+
+        // Execute tool
+        let result = client
+            .execute_tool(tool_name, arguments)
+            .await
+            .map_err(|e| StateError::Internal {
+                message: format!("Failed to execute MCP tool: {}", e),
+            })?;
+
+        // Disconnect
+        let _ = client.disconnect().await;
+
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
@@ -2670,6 +3503,8 @@ mod tests {
             system: None,
             description: None,
             project_id: None,
+            user_id: None,
+            org_id: None,
             memory_blocks: vec![CreateBlockRequest {
                 label: "persona".to_string(),
                 value: "I am a test agent".to_string(),
@@ -2685,7 +3520,7 @@ mod tests {
 
     #[test]
     fn test_create_and_get_agent() {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         let agent = create_test_agent("test-agent");
         let agent_id = agent.id.clone();
 
@@ -2699,7 +3534,7 @@ mod tests {
 
     #[test]
     fn test_list_agents_pagination() {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
 
         for i in 0..5 {
             let agent = create_test_agent(&format!("agent-{}", i));
@@ -2724,7 +3559,7 @@ mod tests {
 
     #[test]
     fn test_delete_agent() {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         let agent = create_test_agent("to-delete");
         let agent_id = agent.id.clone();
 
@@ -2737,7 +3572,7 @@ mod tests {
 
     #[test]
     fn test_update_block() {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         let agent = create_test_agent("block-test");
         let agent_id = agent.id.clone();
         let block_id = agent.blocks[0].id.clone();
@@ -2755,7 +3590,7 @@ mod tests {
 
     #[test]
     fn test_messages() {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         let agent = create_test_agent("msg-test");
         let agent_id = agent.id.clone();
 
@@ -2770,7 +3605,10 @@ mod tests {
                 role: crate::models::MessageRole::User,
                 content: format!("Message {}", i),
                 tool_call_id: None,
-                tool_calls: None,
+                tool_calls: vec![],
+                tool_call: None,
+                tool_return: None,
+                status: None,
                 created_at: chrono::Utc::now(),
             };
             state.add_message(&agent_id, msg).unwrap();
@@ -2784,25 +3622,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_dual_mode_get_agent_hashmap() {
-        // Test dual-mode with HashMap (no service)
-        let state = AppState::new();
-        let agent = create_test_agent("dual-mode-test");
-        let agent_id = agent.id.clone();
+    async fn test_async_methods_require_agent_service() {
+        // Test that async methods return error when AgentService is not configured
+        let state = AppState::new(kelpie_core::TokioRuntime);
 
-        // Create via HashMap
-        state.create_agent(agent).unwrap();
+        // get_agent_async should error without service
+        let result = state.get_agent_async("any-id").await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("AgentService not configured"));
 
-        // Get via dual-mode method (should use HashMap)
-        let retrieved = state.get_agent_async(&agent_id).await.unwrap();
-        assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().id, agent_id);
+        // create_agent_async should error without service
+        let request = crate::models::CreateAgentRequest {
+            name: "test".to_string(),
+            agent_type: crate::models::AgentType::default(),
+            model: None,
+            embedding: None,
+            system: None,
+            description: None,
+            memory_blocks: vec![],
+            block_ids: vec![],
+            tool_ids: vec![],
+            tags: vec![],
+            metadata: serde_json::json!({}),
+            project_id: None,
+            user_id: None,
+            org_id: None,
+        };
+        let result = state.create_agent_async(request).await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("AgentService not configured"));
 
-        // Delete via dual-mode
-        state.delete_agent_async(&agent_id).await.unwrap();
-
-        // Verify deleted
-        let retrieved = state.get_agent_async(&agent_id).await.unwrap();
-        assert!(retrieved.is_none());
+        // delete_agent_async should error without service
+        let result = state.delete_agent_async("any-id").await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("AgentService not configured"));
     }
 }

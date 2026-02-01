@@ -30,8 +30,11 @@ thiserror = "2.0"
 anyhow = "1.0"
 
 # For virtio-vsock communication
-# We'll use tokio UnixStream for now (vsock sockets work like Unix sockets)
-# In production with real libkrun, we'd use tokio-vsock or similar
+tokio-vsock = { version = "0.7", optional = true }
+
+[features]
+default = ["vsock"]
+vsock = ["dep:tokio-vsock"]
 
 [target.'cfg(target_env = "musl")'.dependencies]
 # Ensure static linking with musl

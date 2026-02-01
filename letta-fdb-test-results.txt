@@ -1,0 +1,169 @@
+OpenTelemetry configuration OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE is not supported by Datadog.
+============================= test session starts ==============================
+platform darwin -- Python 3.13.11, pytest-9.0.2, pluggy-1.6.0 -- /Users/seshendranalla/Development/kelpie/letta-repo/.venv/bin/python3.13
+cachedir: .pytest_cache
+metadata: {'Python': '3.13.11', 'Platform': 'macOS-15.3-arm64-arm-64bit-Mach-O', 'Packages': {'pytest': '9.0.2', 'pluggy': '1.6.0'}, 'Plugins': {'anyio': '4.12.1', 'mock': '3.15.1', 'json-report': '1.5.0', 'metadata': '3.1.1', 'order': '1.3.0', 'asyncio': '1.3.0', 'ddtrace': '4.2.2', 'Faker': '40.1.2', 'typeguard': '4.4.4'}, 'JAVA_HOME': '/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home'}
+rootdir: /Users/seshendranalla/Development/kelpie/letta-repo/tests
+configfile: pytest.ini
+plugins: anyio-4.12.1, mock-3.15.1, json-report-1.5.0, metadata-3.1.1, order-1.3.0, asyncio-1.3.0, ddtrace-4.2.2, Faker-40.1.2, typeguard-4.4.4
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collecting ... collected 45 items
+
+tests/sdk/agents_test.py::test_create[caren_agent-params0-extra_expected_values0-None] PASSED [  2%]
+tests/sdk/blocks_test.py::test_create[human_block-params0-extra_expected_values0-None] PASSED [  4%]
+tests/sdk/blocks_test.py::test_create[persona_block-params1-extra_expected_values1-None] PASSED [  6%]
+tests/sdk/tools_test.py::test_create[friendly_func-params0-extra_expected_values0-None] PASSED [  8%]
+tests/sdk/tools_test.py::test_create[unfriendly_func-params1-extra_expected_values1-None] PASSED [ 11%]
+tests/sdk/agents_test.py::test_retrieve PASSED                           [ 13%]
+tests/sdk/blocks_test.py::test_retrieve PASSED                           [ 15%]
+tests/sdk/tools_test.py::test_retrieve PASSED                            [ 17%]
+tests/sdk/agents_test.py::test_upsert[NOTSET] SKIPPED (got empty par...) [ 20%]
+tests/sdk/blocks_test.py::test_upsert[NOTSET] SKIPPED (got empty par...) [ 22%]
+tests/sdk/tools_test.py::test_upsert[unfriendly_func-params0-extra_expected_values0-None] PASSED [ 24%]
+tests/sdk/agents_test.py::test_update[caren_agent-params0-extra_expected_values0-None] PASSED [ 26%]
+tests/sdk/blocks_test.py::test_update[human_block-params0-extra_expected_values0-None] PASSED [ 28%]
+tests/sdk/blocks_test.py::test_update[persona_block-params1-extra_expected_values1-UnprocessableEntityError] PASSED [ 31%]
+tests/sdk/tools_test.py::test_update[friendly_func-params0-extra_expected_values0-None] PASSED [ 33%]
+tests/sdk/tools_test.py::test_update[unfriendly_func-params1-extra_expected_values1-None] PASSED [ 35%]
+tests/sdk/agents_test.py::test_list[query_params0-1] PASSED              [ 37%]
+tests/sdk/agents_test.py::test_list[query_params1-1] PASSED              [ 40%]
+tests/sdk/blocks_test.py::test_list[query_params0-2] PASSED              [ 42%]
+tests/sdk/blocks_test.py::test_list[query_params1-1] PASSED              [ 44%]
+tests/sdk/blocks_test.py::test_list[query_params2-1] PASSED              [ 46%]
+tests/sdk/tools_test.py::test_list[query_params0-2] PASSED               [ 48%]
+tests/sdk/tools_test.py::test_list[query_params1-1] PASSED               [ 51%]
+tests/sdk/mcp_servers_test.py::test_create_stdio_mcp_server PASSED       [ 53%]
+tests/sdk/mcp_servers_test.py::test_create_sse_mcp_server PASSED         [ 55%]
+tests/sdk/mcp_servers_test.py::test_create_streamable_http_mcp_server PASSED [ 57%]
+tests/sdk/mcp_servers_test.py::test_list_mcp_servers PASSED              [ 60%]
+tests/sdk/mcp_servers_test.py::test_get_specific_mcp_server PASSED       [ 62%]
+tests/sdk/mcp_servers_test.py::test_update_stdio_mcp_server PASSED       [ 64%]
+tests/sdk/mcp_servers_test.py::test_update_sse_mcp_server PASSED         [ 66%]
+tests/sdk/mcp_servers_test.py::test_delete_mcp_server PASSED             [ 68%]
+tests/sdk/mcp_servers_test.py::test_invalid_server_type PASSED           [ 71%]
+tests/sdk/mcp_servers_test.py::test_multiple_server_types_coexist PASSED [ 73%]
+tests/sdk/mcp_servers_test.py::test_partial_update_preserves_fields PASSED [ 75%]
+tests/sdk/mcp_servers_test.py::test_concurrent_server_operations PASSED  [ 77%]
+tests/sdk/mcp_servers_test.py::test_full_server_lifecycle PASSED         [ 80%]
+tests/sdk/mcp_servers_test.py::test_empty_tools_list PASSED              [ 82%]
+tests/sdk/mcp_servers_test.py::test_mcp_echo_tool_with_agent FAILED      [ 84%]
+tests/sdk/mcp_servers_test.py::test_mcp_add_tool_with_agent FAILED       [ 86%]
+tests/sdk/mcp_servers_test.py::test_mcp_multiple_tools_in_sequence_with_agent FAILED [ 88%]
+tests/sdk/mcp_servers_test.py::test_mcp_complex_schema_tool_with_agent FAILED [ 91%]
+tests/sdk/mcp_servers_test.py::test_comprehensive_mcp_server_tool_listing PASSED [ 93%]
+tests/sdk/agents_test.py::test_delete PASSED                             [ 95%]
+tests/sdk/blocks_test.py::test_delete PASSED                             [ 97%]
+tests/sdk/tools_test.py::test_delete PASSED                              [100%]
+
+=================================== FAILURES ===================================
+________________________ test_mcp_echo_tool_with_agent _________________________
+tests/sdk/mcp_servers_test.py:794: in test_mcp_echo_tool_with_agent
+    echo_call = next((m for m in tool_calls if m.tool_call.name == "echo"), None)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/sdk/mcp_servers_test.py:794: in <genexpr>
+    echo_call = next((m for m in tool_calls if m.tool_call.name == "echo"), None)
+                                               ^^^^^^^^^^^^^^^^
+E   AttributeError: 'dict' object has no attribute 'name'
+---------------------------- Captured stdout setup -----------------------------
+httpx - INFO - HTTP Request: POST http://localhost:8283/v1/mcp-servers/ "HTTP/1.1 200 OK"
+httpx - INFO - HTTP Request: GET http://localhost:8283/v1/mcp-servers/mcp_server-ff3e6e38-acd5-40b2-a924-89fe44419e87/tools "HTTP/1.1 200 OK"
+httpx - INFO - HTTP Request: POST http://localhost:8283/v1/agents/ "HTTP/1.1 200 OK"
+------------------------------ Captured log setup ------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/mcp-servers/ "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://localhost:8283/v1/mcp-servers/mcp_server-ff3e6e38-acd5-40b2-a924-89fe44419e87/tools "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/agents/ "HTTP/1.1 200 OK"
+----------------------------- Captured stdout call -----------------------------
+httpx - INFO - HTTP Request: POST http://localhost:8283/v1/agents/b956c52f-be64-45d0-b6e8-22a58d7005dd/messages "HTTP/1.1 200 OK"
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/agents/b956c52f-be64-45d0-b6e8-22a58d7005dd/messages "HTTP/1.1 200 OK"
+--------------------------- Captured stdout teardown ---------------------------
+httpx - INFO - HTTP Request: DELETE http://localhost:8283/v1/agents/b956c52f-be64-45d0-b6e8-22a58d7005dd "HTTP/1.1 200 OK"
+httpx - INFO - HTTP Request: DELETE http://localhost:8283/v1/mcp-servers/mcp_server-ff3e6e38-acd5-40b2-a924-89fe44419e87 "HTTP/1.1 200 OK"
+---------------------------- Captured log teardown -----------------------------
+INFO     httpx:_client.py:1025 HTTP Request: DELETE http://localhost:8283/v1/agents/b956c52f-be64-45d0-b6e8-22a58d7005dd "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: DELETE http://localhost:8283/v1/mcp-servers/mcp_server-ff3e6e38-acd5-40b2-a924-89fe44419e87 "HTTP/1.1 200 OK"
+_________________________ test_mcp_add_tool_with_agent _________________________
+tests/sdk/mcp_servers_test.py:832: in test_mcp_add_tool_with_agent
+    add_call = next((m for m in tool_calls if m.tool_call.name == "add"), None)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/sdk/mcp_servers_test.py:832: in <genexpr>
+    add_call = next((m for m in tool_calls if m.tool_call.name == "add"), None)
+                                              ^^^^^^^^^^^^^^^^
+E   AttributeError: 'dict' object has no attribute 'name'
+---------------------------- Captured stdout setup -----------------------------
+httpx - INFO - HTTP Request: POST http://localhost:8283/v1/mcp-servers/ "HTTP/1.1 200 OK"
+httpx - INFO - HTTP Request: GET http://localhost:8283/v1/mcp-servers/mcp_server-cb2ac8a2-bbfe-474c-8b9a-8f9d29708c4b/tools "HTTP/1.1 200 OK"
+httpx - INFO - HTTP Request: POST http://localhost:8283/v1/agents/ "HTTP/1.1 200 OK"
+------------------------------ Captured log setup ------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/mcp-servers/ "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://localhost:8283/v1/mcp-servers/mcp_server-cb2ac8a2-bbfe-474c-8b9a-8f9d29708c4b/tools "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/agents/ "HTTP/1.1 200 OK"
+----------------------------- Captured stdout call -----------------------------
+httpx - INFO - HTTP Request: POST http://localhost:8283/v1/agents/f42e9525-272b-45f2-a76d-5969b63fbe61/messages "HTTP/1.1 200 OK"
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/agents/f42e9525-272b-45f2-a76d-5969b63fbe61/messages "HTTP/1.1 200 OK"
+--------------------------- Captured stdout teardown ---------------------------
+httpx - INFO - HTTP Request: DELETE http://localhost:8283/v1/agents/f42e9525-272b-45f2-a76d-5969b63fbe61 "HTTP/1.1 200 OK"
+httpx - INFO - HTTP Request: DELETE http://localhost:8283/v1/mcp-servers/mcp_server-cb2ac8a2-bbfe-474c-8b9a-8f9d29708c4b "HTTP/1.1 200 OK"
+---------------------------- Captured log teardown -----------------------------
+INFO     httpx:_client.py:1025 HTTP Request: DELETE http://localhost:8283/v1/agents/f42e9525-272b-45f2-a76d-5969b63fbe61 "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: DELETE http://localhost:8283/v1/mcp-servers/mcp_server-cb2ac8a2-bbfe-474c-8b9a-8f9d29708c4b "HTTP/1.1 200 OK"
+________________ test_mcp_multiple_tools_in_sequence_with_agent ________________
+tests/sdk/mcp_servers_test.py:920: in test_mcp_multiple_tools_in_sequence_with_agent
+    assert len(tool_calls) >= 3, f"Expected at least 3 tool calls, got {len(tool_calls)}"
+E   AssertionError: Expected at least 3 tool calls, got 0
+E   assert 0 >= 3
+E    +  where 0 = len([])
+----------------------------- Captured stdout call -----------------------------
+httpx - INFO - HTTP Request: POST http://localhost:8283/v1/mcp-servers/ "HTTP/1.1 200 OK"
+httpx - INFO - HTTP Request: GET http://localhost:8283/v1/mcp-servers/mcp_server-177967fc-1ff9-4ca3-9e93-64a98d7182b7/tools "HTTP/1.1 200 OK"
+httpx - INFO - HTTP Request: POST http://localhost:8283/v1/agents/ "HTTP/1.1 200 OK"
+httpx - INFO - HTTP Request: POST http://localhost:8283/v1/agents/8e2c28a2-4980-4a85-a719-1173dabdf9c8/messages "HTTP/1.1 200 OK"
+httpx - INFO - HTTP Request: DELETE http://localhost:8283/v1/mcp-servers/mcp_server-177967fc-1ff9-4ca3-9e93-64a98d7182b7 "HTTP/1.1 200 OK"
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/mcp-servers/ "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://localhost:8283/v1/mcp-servers/mcp_server-177967fc-1ff9-4ca3-9e93-64a98d7182b7/tools "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/agents/ "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/agents/8e2c28a2-4980-4a85-a719-1173dabdf9c8/messages "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: DELETE http://localhost:8283/v1/mcp-servers/mcp_server-177967fc-1ff9-4ca3-9e93-64a98d7182b7 "HTTP/1.1 200 OK"
+___________________ test_mcp_complex_schema_tool_with_agent ____________________
+tests/sdk/mcp_servers_test.py:1023: in test_mcp_complex_schema_tool_with_agent
+    assert len(tool_calls) > 0, "Expected at least one tool call message"
+E   AssertionError: Expected at least one tool call message
+E   assert 0 > 0
+E    +  where 0 = len([])
+----------------------------- Captured stdout call -----------------------------
+httpx - INFO - HTTP Request: POST http://localhost:8283/v1/mcp-servers/ "HTTP/1.1 200 OK"
+httpx - INFO - HTTP Request: GET http://localhost:8283/v1/mcp-servers/mcp_server-4cdaff4c-e11c-420f-b078-60b07c031ae7/tools "HTTP/1.1 200 OK"
+httpx - INFO - HTTP Request: POST http://localhost:8283/v1/agents/ "HTTP/1.1 200 OK"
+httpx - INFO - HTTP Request: POST http://localhost:8283/v1/agents/8da1de52-2776-4b2c-9ea8-a50698a1e99f/messages "HTTP/1.1 200 OK"
+httpx - INFO - HTTP Request: DELETE http://localhost:8283/v1/mcp-servers/mcp_server-4cdaff4c-e11c-420f-b078-60b07c031ae7 "HTTP/1.1 200 OK"
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/mcp-servers/ "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://localhost:8283/v1/mcp-servers/mcp_server-4cdaff4c-e11c-420f-b078-60b07c031ae7/tools "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/agents/ "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://localhost:8283/v1/agents/8da1de52-2776-4b2c-9ea8-a50698a1e99f/messages "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: DELETE http://localhost:8283/v1/mcp-servers/mcp_server-4cdaff4c-e11c-420f-b078-60b07c031ae7 "HTTP/1.1 200 OK"
+=============================== warnings summary ===============================
+letta/schemas/letta_message.py:207
+  /Users/seshendranalla/Development/kelpie/letta-repo/letta/schemas/letta_message.py:207: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    class ToolCallMessage(LettaMessage):
+
+.venv/lib/python3.13/site-packages/pydantic/_internal/_generate_schema.py:319
+.venv/lib/python3.13/site-packages/pydantic/_internal/_generate_schema.py:319
+.venv/lib/python3.13/site-packages/pydantic/_internal/_generate_schema.py:319
+.venv/lib/python3.13/site-packages/pydantic/_internal/_generate_schema.py:319
+  /Users/seshendranalla/Development/kelpie/letta-repo/.venv/lib/python3.13/site-packages/pydantic/_internal/_generate_schema.py:319: PydanticDeprecatedSince20: `json_encoders` is deprecated. See https://docs.pydantic.dev/2.12/concepts/serialization/#custom-serializers for alternatives. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    warnings.warn(
+
+letta/schemas/response_format.py:18
+  /Users/seshendranalla/Development/kelpie/letta-repo/letta/schemas/response_format.py:18: PydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed. Use `json_schema_extra` instead. (Extra keys: 'example'). Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    type: ResponseFormatType = Field(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/sdk/mcp_servers_test.py::test_mcp_echo_tool_with_agent - Attribu...
+FAILED tests/sdk/mcp_servers_test.py::test_mcp_add_tool_with_agent - Attribut...
+FAILED tests/sdk/mcp_servers_test.py::test_mcp_multiple_tools_in_sequence_with_agent
+FAILED tests/sdk/mcp_servers_test.py::test_mcp_complex_schema_tool_with_agent
+============= 4 failed, 39 passed, 2 skipped, 6 warnings in 29.41s =============

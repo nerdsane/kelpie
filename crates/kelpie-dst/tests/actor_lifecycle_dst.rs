@@ -572,6 +572,106 @@ fn test_dst_kv_state_atomicity_gap() {
     }
 }
 
+/// DST Test: Verify KV-State atomicity under crash conditions
+///
+/// This test verifies the acceptance criteria from Issue #21:
+/// - Inject crash during commit
+/// - Verify: either BOTH persisted or NEITHER persisted
+///
+/// Tests multiple crash/success cycles to ensure atomicity invariant holds.
+#[test]
+fn test_kv_state_atomicity_under_crash() {
+    // Test with different crash probabilities to cover various scenarios
+    for crash_prob in [0.0, 0.3, 0.5, 0.7, 1.0] {
+        let config = SimConfig::new(12345 + (crash_prob * 100.0) as u64);
+
+        let result = Simulation::new(config)
+            .with_fault(
+                FaultConfig::new(FaultType::CrashDuringTransaction, crash_prob)
+                    .with_filter("transaction_commit"),
+            )
+            .run(|env| async move {
+                let actor_id = ActorId::new("dst-test", "atomicity-test")?;
+                let storage = Arc::new(env.storage);
+
+                // Perform multiple invocations
+                let mut active =
+                    ActiveActor::activate(actor_id.clone(), BankAccountActor, storage.clone())
+                        .await?;
+
+                let mut successful_ops = 0;
+                let mut failed_ops = 0;
+
+                for i in 0..5 {
+                    let transfer_id = format!("txn-{}", i);
+                    let payload = format!("{}:{}", transfer_id, (i + 1) * 100);
+
+                    match active
+                        .process_invocation("transfer", Bytes::from(payload))
+                        .await
+                    {
+                        Ok(_) => successful_ops += 1,
+                        Err(_) => failed_ops += 1,
+                    }
+                }
+
+                // Deactivate cleanly
+                let _ = active.deactivate().await;
+
+                // VERIFY ATOMICITY INVARIANT:
+                // Check storage directly - KV and state must be consistent
+                let kv_balance = storage
+                    .get(&actor_id, b"balance")
+                    .await?
+                    .map(|b| String::from_utf8_lossy(&b[..]).parse::<i64>().unwrap_or(0));
+
+                let state_bytes = storage.get(&actor_id, b"__state__").await?;
+                let state: Option<BankAccountState> = state_bytes
+                    .as_ref()
+                    .and_then(|b| serde_json::from_slice(b).ok());
+                let has_transfer = state.and_then(|s| s.last_transfer_id).is_some();
+
+                // CRITICAL INVARIANT: If KV has balance, state must have transfer ID
+                // and vice versa. They must be atomic.
+                let kv_has_data = kv_balance.is_some();
+                let state_has_data = has_transfer;
+
+                // After successful ops, both should have data (or neither if all failed)
+                if successful_ops > 0 {
+                    // At least one op succeeded - both must have data
+                    if kv_has_data != state_has_data {
+                        return Err(Error::Internal {
+                            message: format!(
+                                "ATOMICITY VIOLATION: kv_has_data={}, state_has_data={}, \
+                                 successful_ops={}, failed_ops={}",
+                                kv_has_data, state_has_data, successful_ops, failed_ops
+                            ),
+                        });
+                    }
+                }
+
+                // Log results for debugging
+                tracing::info!(
+                    crash_prob = crash_prob,
+                    successful_ops = successful_ops,
+                    failed_ops = failed_ops,
+                    kv_has_data = kv_has_data,
+                    state_has_data = state_has_data,
+                    "Atomicity test completed"
+                );
+
+                Ok(())
+            });
+
+        assert!(
+            result.is_ok(),
+            "Atomicity test failed at crash_prob={}: {:?}",
+            crash_prob,
+            result.err()
+        );
+    }
+}
+
 // =============================================================================
 // Exploratory DST Test - Bug Hunting
 // =============================================================================

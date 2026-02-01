@@ -6,6 +6,7 @@ use crate::error::{ClusterError, ClusterResult};
 use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_core::actor::ActorId;
+use kelpie_core::runtime::Runtime;
 // For future: RPC_MESSAGE_SIZE_BYTES_MAX for message validation
 use kelpie_registry::{Heartbeat, NodeId};
 use serde::{Deserialize, Serialize};
@@ -211,14 +212,18 @@ pub trait RpcHandler: Send + Sync {
 /// In-memory RPC transport for testing
 ///
 /// Messages are delivered directly through channels, simulating network behavior.
-pub struct MemoryTransport {
+pub struct MemoryTransport<RT: Runtime> {
     /// Local node ID
     node_id: NodeId,
     /// Local address
     addr: SocketAddr,
+    /// Runtime for task spawning
+    runtime: RT,
     /// Sender channels to other nodes
-    senders: tokio::sync::RwLock<
-        std::collections::HashMap<NodeId, tokio::sync::mpsc::Sender<(NodeId, RpcMessage)>>,
+    senders: std::sync::Arc<
+        tokio::sync::RwLock<
+            std::collections::HashMap<NodeId, tokio::sync::mpsc::Sender<(NodeId, RpcMessage)>>,
+        >,
     >,
     /// Receiver for incoming messages
     receiver: tokio::sync::Mutex<Option<tokio::sync::mpsc::Receiver<(NodeId, RpcMessage)>>>,
@@ -234,19 +239,20 @@ pub struct MemoryTransport {
     running: std::sync::atomic::AtomicBool,
 }
 
-impl MemoryTransport {
+impl<RT: Runtime> MemoryTransport<RT> {
     /// Create a new in-memory transport
-    pub fn new(node_id: NodeId, addr: SocketAddr) -> Self {
+    pub fn new(node_id: NodeId, addr: SocketAddr, runtime: RT) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel(1000);
 
         Self {
             node_id: node_id.clone(),
             addr,
-            senders: tokio::sync::RwLock::new({
+            runtime,
+            senders: std::sync::Arc::new(tokio::sync::RwLock::new({
                 let mut map = std::collections::HashMap::new();
                 map.insert(node_id, tx);
                 map
-            }),
+            })),
             receiver: tokio::sync::Mutex::new(Some(rx)),
             handler: tokio::sync::RwLock::new(None),
             pending: tokio::sync::RwLock::new(std::collections::HashMap::new()),
@@ -260,7 +266,7 @@ impl MemoryTransport {
     /// Note: This is a simplified implementation for testing.
     /// In production, actual TCP connections would be established.
     #[allow(dead_code)]
-    pub async fn connect(&self, other: &MemoryTransport) {
+    pub async fn connect(&self, other: &MemoryTransport<RT>) {
         let mut senders = self.senders.write().await;
         let mut other_senders = other.senders.write().await;
 
@@ -288,6 +294,12 @@ impl MemoryTransport {
                 std::collections::HashMap<RequestId, tokio::sync::oneshot::Sender<RpcMessage>>,
             >,
         >,
+        senders: std::sync::Arc<
+            tokio::sync::RwLock<
+                std::collections::HashMap<NodeId, tokio::sync::mpsc::Sender<(NodeId, RpcMessage)>>,
+            >,
+        >,
+        local_node_id: NodeId,
     ) {
         while let Some((from, message)) = receiver.recv().await {
             // Check if this is a response to a pending request
@@ -302,10 +314,14 @@ impl MemoryTransport {
             }
 
             // Handle as incoming message
-            let handler = handler.read().await;
-            if let Some(ref h) = *handler {
-                if let Some(_response) = h.handle(&from, message).await {
-                    // In a full implementation, we'd send the response back
+            let handler_guard = handler.read().await;
+            if let Some(ref h) = *handler_guard {
+                if let Some(response) = h.handle(&from, message).await {
+                    // Send response back to the sender
+                    let senders = senders.read().await;
+                    if let Some(sender) = senders.get(&from) {
+                        let _ = sender.send((local_node_id.clone(), response)).await;
+                    }
                 }
             }
         }
@@ -313,7 +329,7 @@ impl MemoryTransport {
 }
 
 #[async_trait]
-impl RpcTransport for MemoryTransport {
+impl<RT: Runtime + 'static> RpcTransport for MemoryTransport<RT> {
     async fn send(&self, target: &NodeId, message: RpcMessage) -> ClusterResult<()> {
         let senders = self.senders.read().await;
         let sender = senders
@@ -349,7 +365,12 @@ impl RpcTransport for MemoryTransport {
         self.send(target, message).await?;
 
         // Wait for response with timeout
-        match tokio::time::timeout(timeout, rx).await {
+        // Note: We use self.runtime.timeout if available, but Runtime trait doesn't have timeout method that returns Result<T, Elapsed> easily compatible here without mapping.
+        // Actually Runtime::timeout returns Result<T, ()>.
+        // tokio::time::timeout returns Result<T, Elapsed>.
+        // Let's use runtime.timeout and map error.
+
+        match self.runtime.timeout(timeout, rx).await {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(_)) => Err(ClusterError::rpc_failed(target, "response channel closed")),
             Err(_) => {
@@ -405,7 +426,17 @@ impl RpcTransport for MemoryTransport {
         let pending =
             std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
 
-        tokio::spawn(Self::process_messages(receiver, handler, pending));
+        let senders = self.senders.clone();
+        let local_node_id = self.node_id.clone();
+
+        // Fire-and-forget background task
+        std::mem::drop(self.runtime.spawn(Self::process_messages(
+            receiver,
+            handler,
+            pending,
+            senders,
+            local_node_id,
+        )));
 
         Ok(())
     }
@@ -424,11 +455,13 @@ impl RpcTransport for MemoryTransport {
 /// TCP-based RPC transport for real network communication
 ///
 /// Wire protocol: [4-byte big-endian length][JSON payload]
-pub struct TcpTransport {
+pub struct TcpTransport<RT: Runtime> {
     /// Local node ID
     node_id: NodeId,
     /// Local listening address
     local_addr: SocketAddr,
+    /// Runtime for task spawning
+    runtime: RT,
     /// Active connections to other nodes
     connections:
         std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<NodeId, TcpConnection>>>,
@@ -456,12 +489,13 @@ struct TcpConnection {
     sender: tokio::sync::mpsc::Sender<RpcMessage>,
 }
 
-impl TcpTransport {
+impl<RT: Runtime + 'static> TcpTransport<RT> {
     /// Create a new TCP transport
-    pub fn new(node_id: NodeId, local_addr: SocketAddr) -> Self {
+    pub fn new(node_id: NodeId, local_addr: SocketAddr, runtime: RT) -> Self {
         Self {
             node_id,
             local_addr,
+            runtime,
             connections: std::sync::Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
@@ -522,21 +556,35 @@ impl TcpTransport {
         // Create channel for outgoing messages
         let (tx, rx) = tokio::sync::mpsc::channel::<RpcMessage>(100);
 
-        // Spawn writer task
+        // Spawn writer task (fire-and-forget)
         let target_clone = target.clone();
-        tokio::spawn(Self::writer_task(write_half, rx, target_clone.clone()));
+        std::mem::drop(
+            self.runtime
+                .spawn(Self::writer_task(write_half, rx, target_clone.clone())),
+        );
 
         // Spawn reader task
         let pending = self.pending.clone();
         let node_id = self.node_id.clone();
         let connections = self.connections.clone();
+        let handler = self.handler.clone();
+        let response_sender = tx.clone();
 
-        tokio::spawn(async move {
-            Self::reader_task(read_half, pending, target_clone.clone(), node_id).await;
+        // Fire-and-forget background task
+        std::mem::drop(self.runtime.spawn(async move {
+            Self::reader_task(
+                read_half,
+                pending,
+                target_clone.clone(),
+                node_id,
+                handler,
+                response_sender,
+            )
+            .await;
             // Remove connection on disconnect
             let mut conns = connections.write().await;
             conns.remove(&target_clone);
-        });
+        }));
 
         // Store connection
         {
@@ -599,6 +647,8 @@ impl TcpTransport {
         >,
         from_node: NodeId,
         _local_node: NodeId,
+        handler: std::sync::Arc<tokio::sync::RwLock<Option<Box<dyn RpcHandler>>>>,
+        response_sender: tokio::sync::mpsc::Sender<RpcMessage>,
     ) {
         use tokio::io::AsyncReadExt;
 
@@ -648,9 +698,18 @@ impl TcpTransport {
                 }
             }
 
-            // Non-response messages would be handled by the handler
-            // For now, we just log them
-            tracing::debug!(node = %from_node, "Received non-response message (handler not implemented for incoming)");
+            // Handle incoming request via RpcHandler
+            let handler_guard = handler.read().await;
+            if let Some(ref h) = *handler_guard {
+                if let Some(response) = h.handle(&from_node, message).await {
+                    // Send response back to the sender
+                    if let Err(e) = response_sender.send(response).await {
+                        tracing::error!(node = %from_node, error = %e, "Failed to send response");
+                    }
+                }
+            } else {
+                tracing::debug!(node = %from_node, "No handler registered, ignoring request");
+            }
         }
 
         tracing::debug!(node = %from_node, "Reader task exiting");
@@ -667,6 +726,7 @@ impl TcpTransport {
                 std::collections::HashMap<RequestId, tokio::sync::oneshot::Sender<RpcMessage>>,
             >,
         >,
+        handler: std::sync::Arc<tokio::sync::RwLock<Option<Box<dyn RpcHandler>>>>,
         local_node: NodeId,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) {
@@ -686,27 +746,33 @@ impl TcpTransport {
                             // Create channel for outgoing messages
                             let (tx, rx) = tokio::sync::mpsc::channel::<RpcMessage>(100);
 
-                            // Spawn writer task
+                            // Spawn writer task (fire-and-forget)
                             let node_clone = temp_node_id.clone();
-                            tokio::spawn(Self::writer_task(write_half, rx, node_clone));
+                            std::mem::drop(kelpie_core::current_runtime()
+                                .spawn(Self::writer_task(write_half, rx, node_clone)));
 
                             // Spawn reader task
                             let pending_clone = pending.clone();
                             let local_node_clone = local_node.clone();
                             let node_clone = temp_node_id.clone();
                             let connections_clone = connections.clone();
+                            let handler_clone = handler.clone();
+                            let response_sender = tx.clone();
 
-                            tokio::spawn(async move {
+                            // Fire-and-forget background task
+                            std::mem::drop(kelpie_core::current_runtime().spawn(async move {
                                 Self::reader_task(
                                     read_half,
                                     pending_clone,
                                     node_clone.clone(),
                                     local_node_clone,
+                                    handler_clone,
+                                    response_sender,
                                 ).await;
                                 // Remove connection on disconnect
                                 let mut conns = connections_clone.write().await;
                                 conns.remove(&node_clone);
-                            });
+                            }));
 
                             // Store connection
                             let mut conns = connections.write().await;
@@ -727,7 +793,7 @@ impl TcpTransport {
 }
 
 #[async_trait]
-impl RpcTransport for TcpTransport {
+impl<RT: Runtime + 'static> RpcTransport for TcpTransport<RT> {
     async fn send(&self, target: &NodeId, message: RpcMessage) -> ClusterResult<()> {
         let sender = self.get_or_create_connection(target).await?;
 
@@ -764,7 +830,7 @@ impl RpcTransport for TcpTransport {
         }
 
         // Wait for response with timeout
-        match tokio::time::timeout(timeout, rx).await {
+        match self.runtime.timeout(timeout, rx).await {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(_)) => {
                 let mut pending = self.pending.write().await;
@@ -823,15 +889,18 @@ impl RpcTransport for TcpTransport {
         let connections =
             std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
         let pending = self.pending.clone();
+        let handler = self.handler.clone();
         let local_node = self.node_id.clone();
 
-        tokio::spawn(Self::accept_task(
+        // Fire-and-forget background task
+        std::mem::drop(self.runtime.spawn(Self::accept_task(
             listener,
             connections,
             pending,
+            handler,
             local_node,
             shutdown_rx,
-        ));
+        )));
 
         Ok(())
     }
@@ -862,6 +931,7 @@ impl RpcTransport for TcpTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kelpie_core::TokioRuntime;
     use kelpie_registry::NodeStatus;
 
     fn test_node_id(n: u32) -> NodeId {
@@ -871,6 +941,10 @@ mod tests {
     fn test_addr(port: u16) -> SocketAddr {
         use std::net::{IpAddr, Ipv4Addr};
         SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port)
+    }
+
+    fn test_runtime() -> TokioRuntime {
+        TokioRuntime
     }
 
     #[test]
@@ -932,13 +1006,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_memory_transport_create() {
-        let transport = MemoryTransport::new(test_node_id(1), test_addr(9001));
+        let transport = MemoryTransport::new(test_node_id(1), test_addr(9001), test_runtime());
         assert_eq!(transport.local_addr(), test_addr(9001));
     }
 
     #[tokio::test]
     async fn test_memory_transport_request_id() {
-        let transport = MemoryTransport::new(test_node_id(1), test_addr(9001));
+        let transport = MemoryTransport::new(test_node_id(1), test_addr(9001), test_runtime());
         let id1 = transport.next_request_id();
         let id2 = transport.next_request_id();
         assert_eq!(id1 + 1, id2);
@@ -946,13 +1020,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_tcp_transport_create() {
-        let transport = TcpTransport::new(test_node_id(1), test_addr(19001));
+        let transport = TcpTransport::new(test_node_id(1), test_addr(19001), test_runtime());
         assert_eq!(transport.local_addr(), test_addr(19001));
     }
 
     #[tokio::test]
     async fn test_tcp_transport_request_id() {
-        let transport = TcpTransport::new(test_node_id(1), test_addr(19002));
+        let transport = TcpTransport::new(test_node_id(1), test_addr(19002), test_runtime());
         let id1 = transport.next_request_id();
         let id2 = transport.next_request_id();
         assert_eq!(id1 + 1, id2);
@@ -960,7 +1034,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tcp_transport_start_stop() {
-        let transport = TcpTransport::new(test_node_id(1), test_addr(19003));
+        let transport = TcpTransport::new(test_node_id(1), test_addr(19003), test_runtime());
 
         // Start the transport
         if let Err(e) = transport.start().await {
@@ -989,8 +1063,8 @@ mod tests {
         let addr1 = test_addr(19004);
         let addr2 = test_addr(19005);
 
-        let transport1 = TcpTransport::new(node1_id.clone(), addr1);
-        let transport2 = TcpTransport::new(node2_id.clone(), addr2);
+        let transport1 = TcpTransport::new(node1_id.clone(), addr1, test_runtime());
+        let transport2 = TcpTransport::new(node2_id.clone(), addr2, test_runtime());
 
         // Start both
         if let Err(e) = transport1.start().await {
@@ -1018,7 +1092,9 @@ mod tests {
         transport2.register_node(node1_id.clone(), addr1).await;
 
         // Give the listeners time to start
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        kelpie_core::current_runtime()
+            .sleep(std::time::Duration::from_millis(10))
+            .await;
 
         // Send a heartbeat from node1 to node2
         let heartbeat = RpcMessage::Heartbeat(Heartbeat::new(
@@ -1033,7 +1109,9 @@ mod tests {
         transport1.send(&node2_id, heartbeat).await.unwrap();
 
         // Give time for message to be received
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        kelpie_core::current_runtime()
+            .sleep(std::time::Duration::from_millis(10))
+            .await;
 
         // Stop both
         transport1.stop().await.unwrap();

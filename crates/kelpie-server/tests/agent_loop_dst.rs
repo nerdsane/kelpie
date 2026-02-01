@@ -82,7 +82,8 @@ async fn create_registry_with_builtin(
 // =============================================================================
 
 /// Test basic tool registration and execution through registry
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_registry_basic_execution() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -115,7 +116,8 @@ async fn test_dst_registry_basic_execution() {
 }
 
 /// Test executing non-existent tool
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_registry_tool_not_found() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -143,7 +145,8 @@ async fn test_dst_registry_tool_not_found() {
 }
 
 /// Test getting tool definitions for LLM
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_registry_get_tool_definitions() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -184,7 +187,8 @@ async fn test_dst_registry_get_tool_definitions() {
 // =============================================================================
 
 /// Test builtin tool execution with fault injection
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_registry_builtin_with_faults() {
     let config = SimConfig::new(12345);
     println!("DST seed: {}", config.seed);
@@ -230,7 +234,8 @@ async fn test_dst_registry_builtin_with_faults() {
 }
 
 /// Test partial fault injection (some succeed, some fail)
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_registry_partial_faults() {
     let config = SimConfig::new(67890);
     println!("DST seed: {}", config.seed);
@@ -314,7 +319,8 @@ fn create_test_mcp_server(name: &str) -> SimMcpServerConfig {
 
 /// Test MCP tool execution through registry with SimMcpClient
 #[cfg(feature = "dst")]
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_registry_mcp_tool_execution() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -378,7 +384,8 @@ async fn test_dst_registry_mcp_tool_execution() {
 
 /// Test MCP tool execution with server crash fault
 #[cfg(feature = "dst")]
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_registry_mcp_with_crash_fault() {
     let config = SimConfig::new(11111);
     println!("DST seed: {}", config.seed);
@@ -437,7 +444,8 @@ async fn test_dst_registry_mcp_with_crash_fault() {
 
 /// Test mixed builtin and MCP tools under faults
 #[cfg(feature = "dst")]
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_registry_mixed_tools_under_faults() {
     let config = SimConfig::new(22222);
     println!("DST seed: {}", config.seed);
@@ -532,7 +540,8 @@ async fn test_dst_registry_mixed_tools_under_faults() {
 
 /// BUG HUNT: What happens when MCP tool is called but no SimMcpClient is set?
 /// This simulates production where real MCP is not yet implemented.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_registry_mcp_without_client() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -579,20 +588,23 @@ async fn test_dst_registry_mcp_without_client() {
 }
 
 /// BUG HUNT: Concurrent tool execution
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_registry_concurrent_execution() {
     let config = SimConfig::new(77777);
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config)
         .run_async(|_env| async move {
+            use kelpie_core::{current_runtime, Runtime};
+            let runtime = current_runtime();
             let registry = Arc::new(create_registry_with_builtin(None).await);
 
             // Spawn multiple concurrent executions
             let mut handles = Vec::new();
             for i in 0..10 {
                 let reg = registry.clone();
-                let handle = tokio::spawn(async move {
+                let handle = runtime.spawn(async move {
                     let result = reg
                         .execute("echo", &json!({"message": format!("concurrent {}", i)}))
                         .await;
@@ -620,7 +632,8 @@ async fn test_dst_registry_concurrent_execution() {
 }
 
 /// BUG HUNT: Registry unregister and re-register
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_registry_unregister_reregister() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -662,7 +675,8 @@ async fn test_dst_registry_unregister_reregister() {
 }
 
 /// BUG HUNT: What happens with very large input?
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_registry_large_input() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -699,7 +713,8 @@ async fn test_dst_registry_large_input() {
 // =============================================================================
 
 /// Test that same seed produces same results
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_registry_determinism() {
     let seed = 33333u64;
 
@@ -748,7 +763,8 @@ async fn test_dst_registry_determinism() {
 // =============================================================================
 
 /// High-load test with mixed faults
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_registry_high_load() {
     let config = SimConfig::new(44444);
     println!("DST seed: {}", config.seed);
@@ -804,7 +820,8 @@ async fn test_dst_registry_high_load() {
 // =============================================================================
 
 /// Test registry behavior with empty input
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_registry_empty_input() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -828,7 +845,8 @@ async fn test_dst_registry_empty_input() {
 }
 
 /// Test registry stats after operations
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_registry_stats() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);

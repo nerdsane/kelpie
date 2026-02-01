@@ -2,10 +2,19 @@
 //!
 //! TigerStyle: DST-first development - these tests define the streaming contract
 //! and will initially FAIL until streaming is implemented.
+//!
+//! # Determinism Requirements
+//!
+//! All tests use `current_runtime().spawn()` which is correct under madsim:
+//! - When `feature = "madsim"` is enabled, current_runtime() returns MadsimRuntime
+//! - MadsimRuntime.spawn() uses simulation-controlled scheduling
+//! - SimLlmClientAdapter uses sim_env.rng for deterministic responses
+//!
+//! Run with: `cargo test --features madsim,dst agent_streaming_dst`
 #![cfg(feature = "dst")]
 
 use async_trait::async_trait;
-use kelpie_core::Result;
+use kelpie_core::{Result, Runtime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -57,7 +66,10 @@ impl LlmClient for SimLlmClientAdapter {
 }
 
 /// Create AgentService from simulation environment
-fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
+fn create_service<R: Runtime + 'static>(
+    runtime: R,
+    sim_env: &SimEnvironment,
+) -> Result<AgentService<R>> {
     let sim_llm = SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone());
     let llm_adapter: Arc<dyn LlmClient> = Arc::new(SimLlmClientAdapter {
         client: Arc::new(sim_llm),
@@ -67,11 +79,15 @@ fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
     let factory = Arc::new(CloneFactory::new(actor));
     let kv = Arc::new(sim_env.storage.clone());
 
-    let mut dispatcher =
-        Dispatcher::<AgentActor, AgentActorState>::new(factory, kv, DispatcherConfig::default());
+    let mut dispatcher = Dispatcher::<AgentActor, AgentActorState, _>::new(
+        factory,
+        kv,
+        DispatcherConfig::default(),
+        runtime.clone(),
+    );
     let handle = dispatcher.handle();
 
-    tokio::spawn(async move {
+    let _dispatcher_handle = runtime.spawn(async move {
         dispatcher.run().await;
     });
 
@@ -85,13 +101,16 @@ fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
 /// - Events emitted: MessageChunk(s) → MessageComplete
 /// - All events arrive in order
 /// - No errors in happy path
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_streaming_basic() {
     let config = SimConfig::new(2001);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            use kelpie_core::current_runtime;
+            let runtime = current_runtime();
+            let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -112,6 +131,8 @@ async fn test_dst_streaming_basic() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -126,7 +147,7 @@ async fn test_dst_streaming_basic() {
 
             // Start streaming in background
             let agent_id = agent.id.clone();
-            tokio::spawn(async move {
+            let _stream_task = runtime.spawn(async move {
                 // This will fail until send_message_stream is implemented
                 let _ = service
                     .send_message_stream(&agent_id, message_json, tx)
@@ -135,11 +156,14 @@ async fn test_dst_streaming_basic() {
 
             // Collect events with timeout
             let mut events = Vec::new();
-            let timeout_duration = Duration::from_secs(5);
-            let start = std::time::Instant::now();
+            let timeout_ms: u64 = 5000;
+            let start_ms = sim_env.io_context.time.now_ms();
 
             loop {
-                match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+                match current_runtime()
+                    .timeout(Duration::from_millis(100), rx.recv())
+                    .await
+                {
                     Ok(Some(event)) => {
                         events.push(event.clone());
                         if matches!(event, StreamEvent::MessageComplete { .. }) {
@@ -148,7 +172,8 @@ async fn test_dst_streaming_basic() {
                     }
                     Ok(None) => break, // Channel closed
                     Err(_) => {
-                        if start.elapsed() > timeout_duration {
+                        let elapsed_ms = sim_env.io_context.time.now_ms() - start_ms;
+                        if elapsed_ms > timeout_ms {
                             break; // Timeout - expected for failing test
                         }
                     }
@@ -192,7 +217,8 @@ async fn test_dst_streaming_basic() {
 /// - Stream completes despite NetworkDelay faults
 /// - No events lost due to delays
 /// - Events still arrive in order
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_streaming_with_network_delay() {
     let config = SimConfig::new(2002);
 
@@ -205,7 +231,9 @@ async fn test_dst_streaming_with_network_delay() {
             0.3,
         ))
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            use kelpie_core::current_runtime;
+            let runtime = current_runtime();
+            let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -221,6 +249,8 @@ async fn test_dst_streaming_with_network_delay() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -235,7 +265,7 @@ async fn test_dst_streaming_with_network_delay() {
 
             // Start streaming in background
             let agent_id = agent.id.clone();
-            tokio::spawn(async move {
+            let _stream_task = runtime.spawn(async move {
                 let _ = service
                     .send_message_stream(&agent_id, message_json, tx)
                     .await;
@@ -243,11 +273,14 @@ async fn test_dst_streaming_with_network_delay() {
 
             // Collect events with timeout
             let mut events = Vec::new();
-            let timeout_duration = Duration::from_secs(10);
-            let start = std::time::Instant::now();
+            let timeout_ms: u64 = 10_000;
+            let start_ms = sim_env.io_context.time.now_ms();
 
             loop {
-                match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                match current_runtime()
+                    .timeout(Duration::from_millis(200), rx.recv())
+                    .await
+                {
                     Ok(Some(event)) => {
                         events.push(event.clone());
                         if matches!(event, StreamEvent::MessageComplete { .. }) {
@@ -256,7 +289,8 @@ async fn test_dst_streaming_with_network_delay() {
                     }
                     Ok(None) => break,
                     Err(_) => {
-                        if start.elapsed() > timeout_duration {
+                        let elapsed_ms = sim_env.io_context.time.now_ms() - start_ms;
+                        if elapsed_ms > timeout_ms {
                             break;
                         }
                     }
@@ -294,13 +328,17 @@ async fn test_dst_streaming_with_network_delay() {
 /// - Actor detects disconnection via send() failure
 /// - Actor stops processing gracefully
 /// - No panic, no resource leak
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_streaming_cancellation() {
     let config = SimConfig::new(2003);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            use kelpie_core::current_runtime;
+            let time = sim_env.io_context.time.clone();
+            let runtime = current_runtime();
+            let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -316,6 +354,8 @@ async fn test_dst_streaming_cancellation() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -330,7 +370,7 @@ async fn test_dst_streaming_cancellation() {
 
             // Start streaming in background
             let agent_id = agent.id.clone();
-            let stream_handle = tokio::spawn(async move {
+            let stream_handle = runtime.spawn(async move {
                 let _ = service
                     .send_message_stream(&agent_id, message_json, tx)
                     .await;
@@ -339,7 +379,10 @@ async fn test_dst_streaming_cancellation() {
             // Receive a few events then drop receiver (simulate disconnect)
             let mut received_count = 0;
             for _ in 0..3 {
-                match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+                match current_runtime()
+                    .timeout(Duration::from_millis(100), rx.recv())
+                    .await
+                {
                     Ok(Some(_)) => {
                         received_count += 1;
                     }
@@ -350,8 +393,8 @@ async fn test_dst_streaming_cancellation() {
             // Drop receiver - simulates client disconnect
             drop(rx);
 
-            // Give actor time to detect disconnection
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            // Give actor time to detect disconnection (deterministic sleep)
+            time.sleep_ms(100).await;
 
             // Assertions: Actor should handle cancellation gracefully
             // Note: May be 0 if method not implemented yet
@@ -361,7 +404,9 @@ async fn test_dst_streaming_cancellation() {
             );
 
             // Streaming task should complete (not hang)
-            let stream_result = tokio::time::timeout(Duration::from_secs(5), stream_handle).await;
+            let stream_result = current_runtime()
+                .timeout(Duration::from_secs(5), stream_handle)
+                .await;
             assert!(
                 stream_result.is_ok(),
                 "streaming task should complete after cancellation"
@@ -385,13 +430,17 @@ async fn test_dst_streaming_cancellation() {
 /// - Slow consumer delays between reads
 /// - No events lost despite backpressure
 /// - Events arrive in order
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_streaming_backpressure() {
     let config = SimConfig::new(2004);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            use kelpie_core::current_runtime;
+            let time = sim_env.io_context.time.clone();
+            let runtime = current_runtime();
+            let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -407,6 +456,8 @@ async fn test_dst_streaming_backpressure() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -421,7 +472,7 @@ async fn test_dst_streaming_backpressure() {
 
             // Start streaming in background
             let agent_id = agent.id.clone();
-            tokio::spawn(async move {
+            let _stream_task = runtime.spawn(async move {
                 let _ = service
                     .send_message_stream(&agent_id, message_json, tx)
                     .await;
@@ -429,16 +480,19 @@ async fn test_dst_streaming_backpressure() {
 
             // Slow consumer - deliberately delay between reads
             let mut events = Vec::new();
-            let timeout_duration = Duration::from_secs(10);
-            let start = std::time::Instant::now();
+            let timeout_ms: u64 = 10_000;
+            let start_ms = sim_env.io_context.time.now_ms();
 
             loop {
-                match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+                match current_runtime()
+                    .timeout(Duration::from_millis(100), rx.recv())
+                    .await
+                {
                     Ok(Some(event)) => {
                         events.push(event.clone());
 
-                        // Slow consumer: 50ms delay between reads
-                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        // Slow consumer: 50ms delay between reads (deterministic sleep)
+                        time.sleep_ms(50).await;
 
                         if matches!(event, StreamEvent::MessageComplete { .. }) {
                             break;
@@ -446,7 +500,8 @@ async fn test_dst_streaming_backpressure() {
                     }
                     Ok(None) => break,
                     Err(_) => {
-                        if start.elapsed() > timeout_duration {
+                        let elapsed_ms = sim_env.io_context.time.now_ms() - start_ms;
+                        if elapsed_ms > timeout_ms {
                             break;
                         }
                     }
@@ -484,13 +539,16 @@ async fn test_dst_streaming_backpressure() {
 /// - Tool calls emit ToolCallStart → ToolCallComplete events
 /// - Tool events in correct order
 /// - Always ends with MessageComplete
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_streaming_with_tool_calls() {
     let config = SimConfig::new(2005);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            use kelpie_core::current_runtime;
+            let runtime = current_runtime();
+            let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create agent with tools
             let request = CreateAgentRequest {
@@ -506,6 +564,8 @@ async fn test_dst_streaming_with_tool_calls() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -520,7 +580,7 @@ async fn test_dst_streaming_with_tool_calls() {
 
             // Start streaming in background
             let agent_id = agent.id.clone();
-            tokio::spawn(async move {
+            let _stream_task = runtime.spawn(async move {
                 let _ = service
                     .send_message_stream(&agent_id, message_json, tx)
                     .await;
@@ -528,11 +588,14 @@ async fn test_dst_streaming_with_tool_calls() {
 
             // Collect events with timeout
             let mut events = Vec::new();
-            let timeout_duration = Duration::from_secs(10);
-            let start = std::time::Instant::now();
+            let timeout_ms: u64 = 10_000;
+            let start_ms = sim_env.io_context.time.now_ms();
 
             loop {
-                match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+                match current_runtime()
+                    .timeout(Duration::from_millis(100), rx.recv())
+                    .await
+                {
                     Ok(Some(event)) => {
                         events.push(event.clone());
                         if matches!(event, StreamEvent::MessageComplete { .. }) {
@@ -541,7 +604,8 @@ async fn test_dst_streaming_with_tool_calls() {
                     }
                     Ok(None) => break,
                     Err(_) => {
-                        if start.elapsed() > timeout_duration {
+                        let elapsed_ms = sim_env.io_context.time.now_ms() - start_ms;
+                        if elapsed_ms > timeout_ms {
                             break;
                         }
                     }
@@ -602,5 +666,108 @@ async fn test_dst_streaming_with_tool_calls() {
         result.is_ok(),
         "tool call streaming test failed: {:?}",
         result.err()
+    );
+}
+
+/// Test determinism: same seed produces same results
+///
+/// Contract:
+/// - Run simulation twice with same seed
+/// - Event sequences should be identical
+/// - Verifies runtime.spawn() uses simulation-controlled scheduling
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_dst_streaming_determinism() {
+    const TEST_SEED: u64 = 2006;
+
+    // Helper to run a simulation and collect event count
+    async fn run_simulation(seed: u64) -> usize {
+        let config = SimConfig::new(seed);
+
+        let result = Simulation::new(config)
+            .run_async(|sim_env| async move {
+                use kelpie_core::current_runtime;
+                let runtime = current_runtime();
+                let service = create_service(runtime.clone(), &sim_env)?;
+
+                // Create agent
+                let request = CreateAgentRequest {
+                    name: "determinism-test".to_string(),
+                    agent_type: AgentType::LettaV1Agent,
+                    model: None,
+                    embedding: None,
+                    system: None,
+                    description: None,
+                    memory_blocks: vec![],
+                    block_ids: vec![],
+                    tool_ids: vec![],
+                    tags: vec![],
+                    metadata: serde_json::json!({}),
+                    project_id: None,
+                    user_id: None,
+                    org_id: None,
+                };
+                let agent = service.create_agent(request).await?;
+
+                // Create channel for streaming events
+                let (tx, mut rx) = mpsc::channel::<StreamEvent>(32);
+
+                // Send message with streaming
+                let message_json = serde_json::json!({
+                    "role": "user",
+                    "content": "Determinism test message"
+                });
+
+                // Start streaming in background - uses current_runtime().spawn()
+                // which is MadsimRuntime.spawn() when madsim feature is enabled
+                let agent_id = agent.id.clone();
+                let _stream_task = runtime.spawn(async move {
+                    let _ = service
+                        .send_message_stream(&agent_id, message_json, tx)
+                        .await;
+                });
+
+                // Collect events with timeout
+                let mut event_count = 0;
+                let timeout_ms: u64 = 5000;
+                let start_ms = sim_env.io_context.time.now_ms();
+
+                loop {
+                    match current_runtime()
+                        .timeout(Duration::from_millis(100), rx.recv())
+                        .await
+                    {
+                        Ok(Some(event)) => {
+                            event_count += 1;
+                            if matches!(event, StreamEvent::MessageComplete { .. }) {
+                                break;
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(_) => {
+                            let elapsed_ms = sim_env.io_context.time.now_ms() - start_ms;
+                            if elapsed_ms > timeout_ms {
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                Ok(event_count)
+            })
+            .await;
+
+        result.unwrap_or(0)
+    }
+
+    // Run twice with same seed
+    let count1 = run_simulation(TEST_SEED).await;
+    let count2 = run_simulation(TEST_SEED).await;
+
+    // Same seed should produce same results
+    assert_eq!(
+        count1, count2,
+        "Same seed ({}) should produce same event count: run1={}, run2={}",
+        TEST_SEED, count1, count2
     );
 }

@@ -1,0 +1,9 @@
+storage:
+  backend: fdb
+  fdb_cluster_file: /usr/local/etc/foundationdb/fdb.cluster
+
+server:
+  host: 0.0.0.0
+  port: 8283
+
+log_level: debug

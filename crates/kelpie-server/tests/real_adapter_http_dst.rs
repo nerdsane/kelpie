@@ -92,7 +92,8 @@ impl HttpClient for StubHttpClient {
 ///
 /// THIS TEST WILL FAIL until RealLlmAdapter overrides stream_complete().
 /// Without override, it uses default (batch → stream) which produces only 2 chunks.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_real_adapter_uses_real_streaming() {
     let config = SimConfig::new(8001);
 
@@ -187,7 +188,8 @@ async fn test_dst_real_adapter_uses_real_streaming() {
 /// - Stream completes despite StorageLatency faults (50%)
 /// - All tokens arrive (no data loss)
 /// - Incremental delivery still works
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_real_adapter_streaming_with_faults() {
     let config = SimConfig::new(8002);
 
@@ -257,7 +259,8 @@ async fn test_dst_real_adapter_streaming_with_faults() {
 /// - HTTP errors are wrapped correctly
 /// - Error messages are preserved
 /// - Stream terminates on error
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_real_adapter_error_handling() {
     let config = SimConfig::new(8003);
 

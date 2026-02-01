@@ -5,6 +5,9 @@
 //! 2. Fault injection works at the I/O boundary (SimSandboxIO)
 //! 3. Determinism - same seed produces same results
 //! 4. Meaningful testing - faults actually cause failures that test error handling
+//!
+//! **Phase 2 Migration:** Converted to use madsim for true runtime determinism.
+//! Tests now run on madsim's deterministic executor (virtual time, deterministic scheduling).
 
 use kelpie_dst::{
     DeterministicRng, FaultConfig, FaultInjectorBuilder, FaultType, SimClock, SimSandboxIOFactory,
@@ -17,7 +20,7 @@ use std::sync::Arc;
 /// The GenericSandbox<SimSandboxIO> uses the SAME lifecycle state machine
 /// that will be used by GenericSandbox<VmSandboxIO> in production.
 /// This means our DST tests exercise the actual production code paths.
-#[tokio::test]
+#[madsim::test]
 async fn test_proper_dst_shared_state_machine() {
     let rng = Arc::new(DeterministicRng::new(42));
     let faults = Arc::new(FaultInjectorBuilder::new(rng.fork()).build());
@@ -63,7 +66,7 @@ async fn test_proper_dst_shared_state_machine() {
 ///
 /// Faults are injected in SimSandboxIO, not in GenericSandbox.
 /// This tests that our business logic handles I/O failures correctly.
-#[tokio::test]
+#[madsim::test]
 async fn test_proper_dst_fault_injection_at_io_boundary() {
     let rng = Arc::new(DeterministicRng::new(42));
 
@@ -92,7 +95,7 @@ async fn test_proper_dst_fault_injection_at_io_boundary() {
 /// Test 3: Determinism - same seed produces same results
 ///
 /// This is CRITICAL for DST - we must be able to reproduce failures.
-#[tokio::test]
+#[madsim::test]
 async fn test_proper_dst_determinism() {
     let seed = 12345u64;
 
@@ -133,7 +136,7 @@ async fn test_proper_dst_determinism() {
 ///
 /// This demonstrates that fault injection actually tests error handling.
 /// With 50% exec failure rate, we should see both successes and failures.
-#[tokio::test]
+#[madsim::test]
 async fn test_proper_dst_meaningful_chaos() {
     let rng = Arc::new(DeterministicRng::new(777));
 
@@ -175,7 +178,7 @@ async fn test_proper_dst_meaningful_chaos() {
 /// Test 5: Snapshot/restore with fault injection
 ///
 /// Tests that the SHARED snapshot logic works under faults.
-#[tokio::test]
+#[madsim::test]
 async fn test_proper_dst_snapshot_under_faults() {
     let rng = Arc::new(DeterministicRng::new(999));
 
@@ -206,7 +209,7 @@ async fn test_proper_dst_snapshot_under_faults() {
 }
 
 /// Summary test that prints the DST architecture benefits
-#[tokio::test]
+#[madsim::test]
 async fn test_proper_dst_summary() {
     println!("\n");
     println!("╔══════════════════════════════════════════════════════════════╗");

@@ -80,8 +80,15 @@ pub enum ToolError {
 
 impl From<ToolError> for kelpie_core::error::Error {
     fn from(err: ToolError) -> Self {
-        kelpie_core::error::Error::Internal {
-            message: err.to_string(),
+        use kelpie_core::error::Error;
+        match err {
+            ToolError::NotFound { name } => Error::not_found("tool", name),
+            ToolError::ExecutionTimeout { tool, timeout_ms } => {
+                Error::timeout(format!("tool execution: {}", tool), timeout_ms)
+            }
+            ToolError::ConfigError { reason } => Error::config(reason),
+            ToolError::IoError(io_err) => Error::Io(io_err),
+            _ => Error::internal(err.to_string()),
         }
     }
 }

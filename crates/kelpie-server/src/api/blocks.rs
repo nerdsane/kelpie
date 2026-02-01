@@ -7,6 +7,7 @@ use axum::{
     extract::{Path, Query, State},
     Json,
 };
+use kelpie_core::Runtime;
 use kelpie_server::models::{Block, UpdateBlockRequest};
 use kelpie_server::state::AppState;
 use serde::Deserialize;
@@ -29,12 +30,12 @@ pub struct ListBlocksParams {
 ///
 /// Supports Letta SDK pagination via `after` parameter.
 #[instrument(skip(state), fields(agent_id = %agent_id, after = ?query.after), level = "info")]
-pub async fn list_blocks(
-    State(state): State<AppState>,
+pub async fn list_blocks<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
     Query(query): Query<ListBlocksParams>,
 ) -> Result<Json<Vec<Block>>, ApiError> {
-    // Phase 6: Get agent from actor system (or HashMap fallback)
+    // Get agent from actor system (AgentService required)
     let agent = state
         .get_agent_async(&agent_id)
         .await?
@@ -71,11 +72,11 @@ pub async fn list_blocks(
 ///
 /// GET /v1/agents/{agent_id}/blocks/{block_id}
 #[instrument(skip(state), fields(agent_id = %agent_id, block_id = %block_id), level = "info")]
-pub async fn get_block(
-    State(state): State<AppState>,
+pub async fn get_block<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path((agent_id, block_id)): Path<(String, String)>,
 ) -> Result<Json<Block>, ApiError> {
-    // Phase 6: Get agent from actor system (or HashMap fallback)
+    // Get agent from actor system (AgentService required)
     let agent = state
         .get_agent_async(&agent_id)
         .await?
@@ -96,12 +97,12 @@ pub async fn get_block(
 ///
 /// PATCH /v1/agents/{agent_id}/blocks/{block_id}
 #[instrument(skip(state, request), fields(agent_id = %agent_id, block_id = %block_id), level = "info")]
-pub async fn update_block(
-    State(state): State<AppState>,
+pub async fn update_block<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path((agent_id, block_id)): Path<(String, String)>,
     Json(request): Json<UpdateBlockRequest>,
 ) -> Result<Json<Block>, ApiError> {
-    // Phase 6: Get agent from actor system (or HashMap fallback)
+    // Get agent from actor system (AgentService required)
     let agent = state
         .get_agent_async(&agent_id)
         .await?
@@ -129,41 +130,34 @@ pub async fn update_block(
         }
     }
 
-    // Update block via AgentService
-    if let Some(service) = state.agent_service() {
-        // Use value from request, or keep current value
-        let new_value = request.value.unwrap_or_else(|| block.value.clone());
+    // Single source of truth: Require AgentService
+    let service = state
+        .agent_service()
+        .ok_or_else(|| ApiError::internal("AgentService not configured"))?;
 
-        service
-            .update_block_by_label(&agent_id, &label, new_value)
-            .await
-            .map_err(|e| ApiError::internal(format!("Failed to update block: {}", e)))?;
+    // Use value from request, or keep current value
+    let new_value = request.value.unwrap_or_else(|| block.value.clone());
 
-        // Get updated agent to return the updated block
-        let updated_agent = state
-            .get_agent_async(&agent_id)
-            .await?
-            .ok_or_else(|| ApiError::internal("Agent not found after update"))?;
+    service
+        .update_block_by_label(&agent_id, &label, new_value)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to update block: {}", e)))?;
 
-        let updated_block = updated_agent
-            .blocks
-            .iter()
-            .find(|b| b.id == block_id)
-            .cloned()
-            .ok_or_else(|| ApiError::internal("Block not found after update"))?;
+    // Get updated agent to return the updated block
+    let updated_agent = state
+        .get_agent_async(&agent_id)
+        .await?
+        .ok_or_else(|| ApiError::internal("Agent not found after update"))?;
 
-        tracing::info!(agent_id = %agent_id, block_id = %block_id, "updated block");
-        Ok(Json(updated_block))
-    } else {
-        // Fallback to HashMap-based update
-        #[allow(deprecated)]
-        let updated = state.update_block(&agent_id, &block_id, |block| {
-            block.apply_update(request);
-        })?;
+    let updated_block = updated_agent
+        .blocks
+        .iter()
+        .find(|b| b.id == block_id)
+        .cloned()
+        .ok_or_else(|| ApiError::internal("Block not found after update"))?;
 
-        tracing::info!(agent_id = %agent_id, block_id = %updated.id, "updated block");
-        Ok(Json(updated))
-    }
+    tracing::info!(agent_id = %agent_id, block_id = %block_id, "updated block");
+    Ok(Json(updated_block))
 }
 
 // =============================================================================
@@ -175,11 +169,11 @@ pub async fn update_block(
 ///
 /// GET /v1/agents/{agent_id}/core-memory/blocks/{label}
 #[instrument(skip(state), fields(agent_id = %agent_id, label = %label), level = "info")]
-pub async fn get_block_by_label(
-    State(state): State<AppState>,
+pub async fn get_block_by_label<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path((agent_id, label)): Path<(String, String)>,
 ) -> Result<Json<Block>, ApiError> {
-    // Get agent (works with both HashMap and AgentService)
+    // Get agent from actor system (AgentService required)
     let agent = state
         .get_agent_async(&agent_id)
         .await?
@@ -200,8 +194,8 @@ pub async fn get_block_by_label(
 ///
 /// PATCH /v1/agents/{agent_id}/core-memory/blocks/{label}
 #[instrument(skip(state, request), fields(agent_id = %agent_id, label = %label), level = "info")]
-pub async fn update_block_by_label(
-    State(state): State<AppState>,
+pub async fn update_block_by_label<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path((agent_id, label)): Path<(String, String)>,
     Json(request): Json<UpdateBlockRequest>,
 ) -> Result<Json<Block>, ApiError> {
@@ -231,40 +225,34 @@ pub async fn update_block_by_label(
         }
     }
 
-    // Update block via AgentService (if available)
-    if let Some(service) = state.agent_service() {
-        // Use value from request, or keep current value
-        let new_value = request.value.unwrap_or_else(|| block.value.clone());
+    // Single source of truth: Require AgentService
+    let service = state
+        .agent_service()
+        .ok_or_else(|| ApiError::internal("AgentService not configured"))?;
 
-        service
-            .update_block_by_label(&agent_id, &label, new_value)
-            .await
-            .map_err(|e| ApiError::internal(format!("Failed to update block: {}", e)))?;
+    // Use value from request, or keep current value
+    let new_value = request.value.unwrap_or_else(|| block.value.clone());
 
-        // Get updated agent to return the updated block
-        let updated_agent = state
-            .get_agent_async(&agent_id)
-            .await?
-            .ok_or_else(|| ApiError::internal("Agent not found after update"))?;
+    service
+        .update_block_by_label(&agent_id, &label, new_value)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to update block: {}", e)))?;
 
-        let updated_block = updated_agent
-            .blocks
-            .iter()
-            .find(|b| b.label == label)
-            .cloned()
-            .ok_or_else(|| ApiError::internal("Block not found after update"))?;
+    // Get updated agent to return the updated block
+    let updated_agent = state
+        .get_agent_async(&agent_id)
+        .await?
+        .ok_or_else(|| ApiError::internal("Agent not found after update"))?;
 
-        tracing::info!(agent_id = %agent_id, label = %label, "updated block by label");
-        Ok(Json(updated_block))
-    } else {
-        // Fallback to HashMap-based update
-        let updated = state.update_block_by_label(&agent_id, &label, |block| {
-            block.apply_update(request);
-        })?;
+    let updated_block = updated_agent
+        .blocks
+        .iter()
+        .find(|b| b.label == label)
+        .cloned()
+        .ok_or_else(|| ApiError::internal("Block not found after update"))?;
 
-        tracing::info!(agent_id = %agent_id, label = %label, "updated block by label");
-        Ok(Json(updated))
-    }
+    tracing::info!(agent_id = %agent_id, label = %label, "updated block by label");
+    Ok(Json(updated_block))
 }
 
 // =============================================================================
@@ -280,8 +268,8 @@ pub async fn update_block_by_label(
 /// - If the parameter looks like a UUID, use block ID lookup
 /// - Otherwise, treat it as a label
 #[instrument(skip(state), fields(agent_id = %agent_id, param = %id_or_label), level = "info")]
-pub async fn get_block_or_label(
-    State(state): State<AppState>,
+pub async fn get_block_or_label<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path((agent_id, id_or_label)): Path<(String, String)>,
 ) -> Result<Json<Block>, ApiError> {
     // Try to parse as UUID - if successful, it's a block ID
@@ -302,8 +290,8 @@ pub async fn get_block_or_label(
 /// - If the parameter looks like a UUID, use block ID update
 /// - Otherwise, treat it as a label
 #[instrument(skip(state, request), fields(agent_id = %agent_id, param = %id_or_label), level = "info")]
-pub async fn update_block_or_label(
-    State(state): State<AppState>,
+pub async fn update_block_or_label<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path((agent_id, id_or_label)): Path<(String, String)>,
     Json(request): Json<UpdateBlockRequest>,
 ) -> Result<Json<Block>, ApiError> {
@@ -319,6 +307,7 @@ pub async fn update_block_or_label(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::api;
     use async_trait::async_trait;
     use axum::body::Body;
@@ -381,19 +370,22 @@ mod tests {
         let storage = SimStorage::new(rng.fork(), faults);
         let kv = Arc::new(storage);
 
-        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState>::new(
+        let runtime = kelpie_core::TokioRuntime;
+
+        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState, _>::new(
             factory,
             kv,
             DispatcherConfig::default(),
+            runtime.clone(),
         );
         let handle = dispatcher.handle();
 
-        tokio::spawn(async move {
+        drop(runtime.spawn(async move {
             dispatcher.run().await;
-        });
+        }));
 
         let service = service::AgentService::new(handle.clone());
-        let state = AppState::with_agent_service(service, handle);
+        let state = AppState::with_agent_service(runtime, service, handle);
 
         // Create agent with a block
         let body = serde_json::json!({

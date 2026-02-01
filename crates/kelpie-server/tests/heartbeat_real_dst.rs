@@ -34,7 +34,7 @@ fn test_real_pause_heartbeats_via_registry() {
 
     let result = Simulation::new(config).run(|env| async move {
         // Create REAL AppState and registry
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::current_runtime());
         let registry = state.tool_registry();
 
         // Create clock source from SimClock
@@ -88,7 +88,7 @@ fn test_real_pause_custom_duration() {
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config).run(|env| async move {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::current_runtime());
         let registry = state.tool_registry();
 
         let clock = env.clock.clone();
@@ -119,7 +119,7 @@ fn test_real_pause_duration_clamping() {
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config).run(|env| async move {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::current_runtime());
         let registry = state.tool_registry();
 
         let clock = env.clock.clone();
@@ -153,7 +153,7 @@ fn test_real_pause_with_clock_advancement() {
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config).run(|env| async move {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::current_runtime());
         let registry = state.tool_registry();
 
         let clock = env.clock.clone();
@@ -203,7 +203,7 @@ fn test_real_pause_determinism() {
     let run_simulation = || {
         let config = SimConfig::new(seed);
         Simulation::new(config).run(|env| async move {
-            let state = AppState::new();
+            let state = AppState::new(kelpie_core::current_runtime());
             let registry = state.tool_registry();
 
             let clock = env.clock.clone();
@@ -243,7 +243,7 @@ fn test_real_pause_with_clock_skew_fault() {
             1.0,
         ))
         .run(|env| async move {
-            let state = AppState::new();
+            let state = AppState::new(kelpie_core::current_runtime());
             let registry = state.tool_registry();
 
             let clock = env.clock.clone();
@@ -280,7 +280,7 @@ fn test_real_pause_high_frequency() {
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config).run(|env| async move {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::current_runtime());
         let registry = state.tool_registry();
 
         let clock = env.clock.clone();
@@ -315,7 +315,7 @@ fn test_real_pause_with_storage_faults() {
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.3))
         .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.2))
         .run(|env| async move {
-            let state = AppState::new();
+            let state = AppState::new(kelpie_core::current_runtime());
             let registry = state.tool_registry();
 
             let clock = env.clock.clone();
@@ -346,7 +346,7 @@ fn test_real_pause_output_format() {
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config).run(|env| async move {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::current_runtime());
         let registry = state.tool_registry();
 
         let clock = env.clock.clone();
@@ -389,7 +389,7 @@ fn test_real_pause_concurrent_execution() {
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config).run(|env| async move {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::current_runtime());
         let registry = state.tool_registry();
 
         let clock = env.clock.clone();
@@ -423,7 +423,7 @@ fn test_real_agent_loop_with_pause() {
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config).run(|env| async move {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::current_runtime());
         let registry = state.tool_registry();
 
         let clock = env.clock.clone();
@@ -484,7 +484,7 @@ fn test_real_agent_loop_resumes_after_pause() {
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config).run(|env| async move {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::current_runtime());
         let registry = state.tool_registry();
 
         let clock = env.clock.clone();

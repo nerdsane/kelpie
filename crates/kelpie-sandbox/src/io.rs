@@ -55,7 +55,7 @@ use std::sync::Arc;
 ///
 /// This trait abstracts the actual I/O operations that differ between
 /// production (real VMs) and DST (simulated). The state machine and
-/// validation logic lives in GenericSandbox<IO>, not here.
+/// validation logic lives in `GenericSandbox`<`IO`>, not here.
 ///
 /// # Implementations
 ///

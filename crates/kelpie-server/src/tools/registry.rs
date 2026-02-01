@@ -1,8 +1,13 @@
 //! Unified Tool Registry Implementation
 //!
 //! TigerStyle: Single registry for all tool types with explicit source tracking.
+//!
+//! DST-Compliant: When the `dst` feature is enabled, supports FaultInjector
+//! for testing custom tool execution error paths.
 
 use crate::llm::ToolDefinition;
+use crate::security::audit::SharedAuditLog;
+use kelpie_core::io::{TimeProvider, WallClockTime};
 use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -10,6 +15,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
+
+#[cfg(feature = "dst")]
+use kelpie_dst::fault::{FaultInjector, FaultType};
+
+/// Helper to compute elapsed time since start_ms using WallClockTime.
+/// WallClockTime is zero-sized, so this has no allocation cost.
+#[inline]
+fn elapsed_ms(start_ms: u64) -> u64 {
+    WallClockTime::new().monotonic_ms().saturating_sub(start_ms)
+}
 
 // =============================================================================
 // Constants (TigerStyle)
@@ -62,11 +77,62 @@ pub struct RegisteredTool {
     pub description: Option<String>,
 }
 
+/// Dispatcher trait for agent-to-agent communication (Issue #75)
+///
+/// TigerStyle: Trait abstraction allows DST testing with simulated dispatchers.
+#[async_trait::async_trait]
+pub trait AgentDispatcher: Send + Sync {
+    /// Invoke another agent by ID
+    ///
+    /// # Arguments
+    /// * `agent_id` - The ID of the agent to invoke (e.g., "helper-agent")
+    /// * `operation` - The operation to invoke (e.g., "handle_message_full")
+    /// * `payload` - The payload bytes (serialized request)
+    /// * `timeout_ms` - Timeout in milliseconds
+    ///
+    /// # Returns
+    /// The response bytes from the target agent
+    async fn invoke_agent(
+        &self,
+        agent_id: &str,
+        operation: &str,
+        payload: bytes::Bytes,
+        timeout_ms: u64,
+    ) -> kelpie_core::Result<bytes::Bytes>;
+}
+
 /// Execution context for tool calls
-#[derive(Debug, Clone)]
+///
+/// TigerStyle: Extended for multi-agent communication (Issue #75)
+#[derive(Clone, Default)]
 pub struct ToolExecutionContext {
+    /// ID of the agent executing the tool
     pub agent_id: Option<String>,
+    /// Project ID for the agent
     pub project_id: Option<String>,
+    /// Current call depth for nested agent calls (0 = top level)
+    pub call_depth: u32,
+    /// Call chain for cycle detection (list of agent IDs in the call stack)
+    pub call_chain: Vec<String>,
+    /// Dispatcher for invoking other agents (Issue #75)
+    /// None if agent-to-agent calls are not available
+    pub dispatcher: Option<Arc<dyn AgentDispatcher>>,
+    /// Audit log for recording tool executions
+    /// None if audit logging is disabled
+    pub audit_log: Option<SharedAuditLog>,
+}
+
+impl std::fmt::Debug for ToolExecutionContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolExecutionContext")
+            .field("agent_id", &self.agent_id)
+            .field("project_id", &self.project_id)
+            .field("call_depth", &self.call_depth)
+            .field("call_chain", &self.call_chain)
+            .field("dispatcher", &self.dispatcher.is_some())
+            .field("audit_log", &self.audit_log.is_some())
+            .finish()
+    }
 }
 
 /// Custom tool definition with source code
@@ -81,9 +147,10 @@ pub struct CustomToolDefinition {
 }
 
 /// Signals that tools can emit to control agent loop behavior
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum ToolSignal {
     /// No signal - normal execution
+    #[default]
     None,
     /// Pause heartbeats for the specified duration
     PauseHeartbeats {
@@ -92,12 +159,6 @@ pub enum ToolSignal {
         /// Duration in minutes (for logging/display)
         minutes: u64,
     },
-}
-
-impl Default for ToolSignal {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// Result of tool execution
@@ -156,12 +217,28 @@ pub type BuiltinToolHandler = Arc<
         + Sync,
 >;
 
+/// Handler function type for context-aware builtin tools (Issue #75)
+///
+/// TigerStyle: Separate type for tools that need execution context (e.g., call_agent).
+/// These handlers receive the full ToolExecutionContext for dispatcher access.
+pub type ContextAwareToolHandler = Arc<
+    dyn Fn(
+            &Value,
+            &ToolExecutionContext,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolExecutionResult> + Send>>
+        + Send
+        + Sync,
+>;
+
 /// Unified tool registry combining all tool sources
 pub struct UnifiedToolRegistry {
     /// All registered tools by name
     tools: RwLock<HashMap<String, RegisteredTool>>,
     /// Builtin tool handlers
     builtin_handlers: RwLock<HashMap<String, BuiltinToolHandler>>,
+    /// Context-aware builtin tool handlers (Issue #75)
+    context_aware_handlers: RwLock<HashMap<String, ContextAwareToolHandler>>,
     /// MCP client pool (server_name -> client) for production
     mcp_clients: RwLock<HashMap<String, Arc<kelpie_tools::McpClient>>>,
     /// Simulated MCP client for DST testing
@@ -169,6 +246,12 @@ pub struct UnifiedToolRegistry {
     sim_mcp_client: RwLock<Option<Arc<kelpie_tools::SimMcpClient>>>,
     /// Custom tool definitions (source code + runtime)
     custom_tools: RwLock<HashMap<String, CustomToolDefinition>>,
+    /// Optional sandbox pool for better performance (uses RwLock for interior mutability)
+    sandbox_pool:
+        RwLock<Option<Arc<kelpie_sandbox::SandboxPool<kelpie_sandbox::ProcessSandboxFactory>>>>,
+    /// Fault injector for DST testing (optional)
+    #[cfg(feature = "dst")]
+    fault_injector: RwLock<Option<Arc<FaultInjector>>>,
 }
 
 impl UnifiedToolRegistry {
@@ -177,11 +260,64 @@ impl UnifiedToolRegistry {
         Self {
             tools: RwLock::new(HashMap::new()),
             builtin_handlers: RwLock::new(HashMap::new()),
+            context_aware_handlers: RwLock::new(HashMap::new()),
             mcp_clients: RwLock::new(HashMap::new()),
             #[cfg(feature = "dst")]
             sim_mcp_client: RwLock::new(None),
             custom_tools: RwLock::new(HashMap::new()),
+            sandbox_pool: RwLock::new(None),
+            #[cfg(feature = "dst")]
+            fault_injector: RwLock::new(None),
         }
+    }
+
+    /// Set the fault injector for DST testing
+    ///
+    /// When set, the registry will inject faults during custom tool execution
+    /// based on the FaultInjector configuration.
+    #[cfg(feature = "dst")]
+    pub async fn set_fault_injector(&self, injector: Arc<FaultInjector>) {
+        *self.fault_injector.write().await = Some(injector);
+        tracing::info!("Fault injector configured for DST testing");
+    }
+
+    /// Check for fault injection and return the fault type if triggered
+    #[cfg(feature = "dst")]
+    async fn check_fault(&self, operation: &str) -> Option<FaultType> {
+        let guard = self.fault_injector.read().await;
+        guard.as_ref().and_then(|fi| fi.should_inject(operation))
+    }
+
+    /// Check for fault injection (no-op when dst feature is disabled)
+    #[cfg(not(feature = "dst"))]
+    #[allow(dead_code)]
+    async fn check_fault(&self, _operation: &str) -> Option<()> {
+        None
+    }
+
+    /// Set a sandbox pool for custom tool execution (builder pattern)
+    ///
+    /// When set, custom tools will use sandboxes from the pool for better performance
+    /// (avoiding sandbox startup overhead on each execution).
+    pub fn with_sandbox_pool(
+        self,
+        pool: Arc<kelpie_sandbox::SandboxPool<kelpie_sandbox::ProcessSandboxFactory>>,
+    ) -> Self {
+        // Use blocking lock since this is called during construction
+        *self.sandbox_pool.blocking_write() = Some(pool);
+        self
+    }
+
+    /// Set a sandbox pool after construction
+    ///
+    /// This allows setting the sandbox pool on an existing registry instance,
+    /// which is useful when the registry is created by AppState.
+    pub async fn set_sandbox_pool(
+        &self,
+        pool: Arc<kelpie_sandbox::SandboxPool<kelpie_sandbox::ProcessSandboxFactory>>,
+    ) {
+        *self.sandbox_pool.write().await = Some(pool);
+        tracing::info!("Sandbox pool configured for custom tool execution");
     }
 
     /// Register a builtin tool
@@ -214,6 +350,46 @@ impl UnifiedToolRegistry {
         self.builtin_handlers.write().await.insert(name, handler);
     }
 
+    /// Register a context-aware builtin tool (Issue #75)
+    ///
+    /// Context-aware tools receive the full ToolExecutionContext, enabling:
+    /// - Agent-to-agent calls via dispatcher
+    /// - Call chain tracking for cycle detection
+    /// - Call depth enforcement
+    ///
+    /// TigerStyle: Separate registration method for context-aware tools.
+    pub async fn register_context_aware_builtin(
+        &self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        input_schema: Value,
+        handler: ContextAwareToolHandler,
+    ) {
+        let name = name.into();
+        let description_str = description.into();
+
+        // TigerStyle: Preconditions
+        assert!(!name.is_empty(), "tool name cannot be empty");
+
+        let definition = ToolDefinition {
+            name: name.clone(),
+            description: description_str.clone(),
+            input_schema,
+        };
+
+        let tool = RegisteredTool {
+            definition,
+            source: ToolSource::Builtin,
+            description: Some(description_str),
+        };
+
+        self.tools.write().await.insert(name.clone(), tool);
+        self.context_aware_handlers
+            .write()
+            .await
+            .insert(name, handler);
+    }
+
     /// Register an MCP tool
     pub async fn register_mcp_tool(
         &self,
@@ -243,6 +419,12 @@ impl UnifiedToolRegistry {
             },
             description: Some(description_str),
         };
+
+        tracing::debug!(
+            tool_name = %name,
+            server = %server,
+            "Registering MCP tool in registry"
+        );
 
         self.tools.write().await.insert(name, tool);
     }
@@ -430,7 +612,7 @@ impl UnifiedToolRegistry {
         input: &Value,
         context: Option<&ToolExecutionContext>,
     ) -> ToolExecutionResult {
-        let start = std::time::Instant::now();
+        let start_ms = WallClockTime::new().monotonic_ms();
 
         // TigerStyle: Preconditions
         assert!(!name.is_empty(), "tool name cannot be empty");
@@ -441,38 +623,75 @@ impl UnifiedToolRegistry {
             None => {
                 return ToolExecutionResult::failure(
                     format!("Tool not found: {}", name),
-                    start.elapsed().as_millis() as u64,
+                    elapsed_ms(start_ms),
                 );
             }
         };
 
         // Route to appropriate handler based on source
-        match &tool.source {
-            ToolSource::Builtin => self.execute_builtin(name, input, start).await,
-            ToolSource::Mcp { server } => self.execute_mcp(name, server, input, start).await,
-            ToolSource::Custom => self.execute_custom(name, input, context, start).await,
+        let result = match &tool.source {
+            ToolSource::Builtin => self.execute_builtin(name, input, context, start_ms).await,
+            ToolSource::Mcp { server } => self.execute_mcp(name, server, input, start_ms).await,
+            ToolSource::Custom => self.execute_custom(name, input, context, start_ms).await,
+        };
+
+        // Audit logging: Record tool execution if audit log is available
+        if let Some(ctx) = context {
+            if let Some(audit_log) = &ctx.audit_log {
+                let input_str = serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string());
+                let agent_id = ctx.agent_id.as_deref().unwrap_or("unknown");
+
+                audit_log.write().await.log_tool_execution(
+                    name,
+                    agent_id,
+                    &input_str,
+                    &result.output,
+                    result.duration_ms,
+                    result.success,
+                    if result.success {
+                        None
+                    } else {
+                        Some(result.output.clone())
+                    },
+                );
+            }
         }
+
+        result
     }
 
     /// Execute a builtin tool
+    ///
+    /// TigerStyle (Issue #75): Checks for context-aware handlers first.
+    /// Context-aware tools (like call_agent) need dispatcher access for inter-agent calls.
     async fn execute_builtin(
         &self,
         name: &str,
         input: &Value,
-        start: std::time::Instant,
+        context: Option<&ToolExecutionContext>,
+        start_ms: u64,
     ) -> ToolExecutionResult {
+        // First, check for context-aware handler (Issue #75)
+        if let Some(handler) = self.context_aware_handlers.read().await.get(name).cloned() {
+            // Context-aware tools require context; provide default if not supplied
+            let default_context = ToolExecutionContext::default();
+            let ctx = context.unwrap_or(&default_context);
+            return handler(input, ctx).await;
+        }
+
+        // Fall back to regular builtin handler
         let handler = match self.builtin_handlers.read().await.get(name) {
             Some(h) => h.clone(),
             None => {
                 return ToolExecutionResult::failure(
                     format!("No handler for builtin tool: {}", name),
-                    start.elapsed().as_millis() as u64,
+                    elapsed_ms(start_ms),
                 );
             }
         };
 
         let output = handler(input).await;
-        let duration = start.elapsed().as_millis() as u64;
+        let duration = elapsed_ms(start_ms);
 
         // Check if output looks like an error
         let success = !output.starts_with("Error:") && !output.starts_with("Failed:");
@@ -490,7 +709,7 @@ impl UnifiedToolRegistry {
         name: &str,
         server: &str,
         input: &Value,
-        start: std::time::Instant,
+        start_ms: u64,
     ) -> ToolExecutionResult {
         // Check for simulated MCP client (DST mode)
         #[cfg(feature = "dst")]
@@ -500,16 +719,10 @@ impl UnifiedToolRegistry {
                     Ok(result) => {
                         let output = serde_json::to_string_pretty(&result)
                             .unwrap_or_else(|_| result.to_string());
-                        return ToolExecutionResult::success(
-                            output,
-                            start.elapsed().as_millis() as u64,
-                        );
+                        return ToolExecutionResult::success(output, elapsed_ms(start_ms));
                     }
                     Err(e) => {
-                        return ToolExecutionResult::failure(
-                            e.to_string(),
-                            start.elapsed().as_millis() as u64,
-                        );
+                        return ToolExecutionResult::failure(e.to_string(), elapsed_ms(start_ms));
                     }
                 }
             }
@@ -523,77 +736,276 @@ impl UnifiedToolRegistry {
                 None => {
                     return ToolExecutionResult::failure(
                         format!("MCP server '{}' not connected", server),
-                        start.elapsed().as_millis() as u64,
+                        elapsed_ms(start_ms),
                     );
                 }
             }
         };
 
-        // Check if client is connected
+        // Check if client is connected, attempt reconnection if not
         if !client.is_connected().await {
-            return ToolExecutionResult::failure(
-                format!("MCP server '{}' is not connected", server),
-                start.elapsed().as_millis() as u64,
-            );
+            tracing::warn!(server = %server, "MCP server disconnected, attempting reconnect");
+
+            match client.reconnect().await {
+                Ok(()) => {
+                    tracing::info!(server = %server, "Successfully reconnected to MCP server");
+                }
+                Err(e) => {
+                    return ToolExecutionResult::failure(
+                        format!(
+                            "MCP server '{}' is not connected and reconnection failed: {}",
+                            server, e
+                        ),
+                        elapsed_ms(start_ms),
+                    );
+                }
+            }
         }
 
         // Execute tool via MCP client
         match client.execute_tool(name, input.clone()).await {
             Ok(result) => {
-                // Extract content from MCP result
-                // MCP tools/call returns: {"content": [{"type": "text", "text": "..."}]}
-                let output = if let Some(content) = result.get("content").and_then(|c| c.as_array())
-                {
-                    // Concatenate all text content
-                    content
-                        .iter()
-                        .filter_map(|item| {
-                            item.get("text")
-                                .and_then(|t| t.as_str())
-                                .map(|s| s.to_string())
-                        })
-                        .collect::<Vec<String>>()
-                        .join("\n")
-                } else {
-                    // Fallback: serialize entire result
-                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string())
-                };
-
-                ToolExecutionResult::success(output, start.elapsed().as_millis() as u64)
+                // Extract content using robust helper function
+                match kelpie_tools::extract_tool_output(&result, name) {
+                    Ok(output) => ToolExecutionResult::success(output, elapsed_ms(start_ms)),
+                    Err(e) => ToolExecutionResult::failure(
+                        format!("Failed to extract tool output: {}", e),
+                        elapsed_ms(start_ms),
+                    ),
+                }
             }
             Err(e) => ToolExecutionResult::failure(
                 format!("MCP tool execution failed: {}", e),
-                start.elapsed().as_millis() as u64,
+                elapsed_ms(start_ms),
             ),
         }
     }
 
     /// Execute a custom tool in a sandboxed runtime
+    ///
+    /// Supports Python, JavaScript (Node.js), and Shell (Bash) runtimes.
+    ///
+    /// DST-Compliant: When the `dst` feature is enabled, checks for fault injection
+    /// before sandbox acquisition and execution.
     async fn execute_custom(
         &self,
         name: &str,
         input: &Value,
         context: Option<&ToolExecutionContext>,
-        start: std::time::Instant,
+        start_ms: u64,
     ) -> ToolExecutionResult {
+        // DST: Check for custom tool execution faults
+        #[cfg(feature = "dst")]
+        if let Some(fault) = self.check_fault("custom_tool_execute").await {
+            match fault {
+                FaultType::CustomToolExecFail => {
+                    return ToolExecutionResult::failure(
+                        "DST fault injection: simulated custom tool execution failure",
+                        elapsed_ms(start_ms),
+                    );
+                }
+                FaultType::CustomToolExecTimeout { timeout_ms } => {
+                    return ToolExecutionResult::failure(
+                        format!(
+                            "DST fault injection: simulated timeout after {}ms",
+                            timeout_ms
+                        ),
+                        elapsed_ms(start_ms),
+                    );
+                }
+                FaultType::CustomToolSandboxAcquireFail => {
+                    return ToolExecutionResult::failure(
+                        "DST fault injection: simulated sandbox acquisition failure (pool exhausted)",
+                        elapsed_ms(start_ms),
+                    );
+                }
+                _ => {}
+            }
+        }
+
         let Some(custom_tool) = self.custom_tools.read().await.get(name).cloned() else {
             return ToolExecutionResult::failure(
                 format!("Custom tool not found: {}", name),
-                start.elapsed().as_millis() as u64,
+                elapsed_ms(start_ms),
             );
         };
 
         let runtime = custom_tool.runtime.to_lowercase();
-        if runtime != "python" && runtime != "py" {
-            return ToolExecutionResult::failure(
-                format!("Unsupported custom tool runtime: {}", custom_tool.runtime),
-                start.elapsed().as_millis() as u64,
-            );
+
+        // Build the script and command based on runtime
+        let (command, args, _script) = match runtime.as_str() {
+            "python" | "py" => {
+                let script = Self::build_python_wrapper(name, &custom_tool.source_code);
+                (
+                    "python3".to_string(),
+                    vec!["-c".to_string(), script.clone()],
+                    script,
+                )
+            }
+            "javascript" | "js" | "node" => {
+                let script = Self::build_javascript_wrapper(name, &custom_tool.source_code);
+                (
+                    "node".to_string(),
+                    vec!["-e".to_string(), script.clone()],
+                    script,
+                )
+            }
+            "shell" | "bash" | "sh" => {
+                let script = Self::build_shell_wrapper(input, &custom_tool.source_code);
+                (
+                    "bash".to_string(),
+                    vec!["-c".to_string(), script.clone()],
+                    script,
+                )
+            }
+            _ => {
+                return ToolExecutionResult::failure(
+                    format!("Unsupported custom tool runtime: {}", custom_tool.runtime),
+                    elapsed_ms(start_ms),
+                );
+            }
+        };
+
+        // Get or create sandbox
+        let pool_guard = self.sandbox_pool.read().await;
+        let result = if let Some(pool) = pool_guard.as_ref() {
+            // Use sandbox from pool
+            match pool.acquire().await {
+                Ok(sandbox) => {
+                    let result = self
+                        .run_in_sandbox(
+                            &sandbox,
+                            &command,
+                            &args,
+                            input,
+                            context,
+                            &custom_tool,
+                            start_ms,
+                        )
+                        .await;
+                    pool.release(sandbox).await;
+                    result
+                }
+                Err(e) => ToolExecutionResult::failure(
+                    format!("Failed to acquire sandbox from pool: {}", e),
+                    elapsed_ms(start_ms),
+                ),
+            }
+        } else {
+            // Create a one-off sandbox
+            let mut sandbox = ProcessSandbox::new(SandboxConfig::default());
+            if let Err(e) = sandbox.start().await {
+                return ToolExecutionResult::failure(
+                    format!("Failed to start sandbox: {}", e),
+                    elapsed_ms(start_ms),
+                );
+            }
+
+            let result = self
+                .run_in_sandbox(
+                    &sandbox,
+                    &command,
+                    &args,
+                    input,
+                    context,
+                    &custom_tool,
+                    start_ms,
+                )
+                .await;
+
+            let _ = sandbox.stop().await;
+            result
+        };
+
+        result
+    }
+
+    /// Run a command in a sandbox
+    async fn run_in_sandbox(
+        &self,
+        sandbox: &ProcessSandbox,
+        command: &str,
+        args: &[String],
+        input: &Value,
+        context: Option<&ToolExecutionContext>,
+        custom_tool: &CustomToolDefinition,
+        start_ms: u64,
+    ) -> ToolExecutionResult {
+        // Install requirements for Python
+        if command == "python3" && !custom_tool.requirements.is_empty() {
+            let mut install_args = vec!["-m", "pip", "install"];
+            for requirement in &custom_tool.requirements {
+                install_args.push(requirement);
+            }
+
+            if let Err(e) = sandbox
+                .exec(
+                    "python3",
+                    &install_args,
+                    ExecOptions::new().with_timeout(Duration::from_secs(120)),
+                )
+                .await
+            {
+                return ToolExecutionResult::failure(
+                    format!("Failed to install tool requirements: {}", e),
+                    elapsed_ms(start_ms),
+                );
+            }
         }
 
+        let mut exec_opts = ExecOptions::new()
+            .with_timeout(Duration::from_secs(30))
+            .with_max_output(1024 * 1024)
+            .with_stdin(serde_json::to_vec(input).unwrap_or_default());
+
+        if let Some(ctx) = context {
+            if let Some(agent_id) = &ctx.agent_id {
+                exec_opts = exec_opts.with_env("LETTA_AGENT_ID", agent_id.clone());
+            }
+            if let Some(project_id) = &ctx.project_id {
+                exec_opts = exec_opts.with_env("LETTA_PROJECT_ID", project_id.clone());
+            }
+        }
+
+        if let Ok(api_key) = std::env::var("LETTA_API_KEY") {
+            exec_opts = exec_opts.with_env("LETTA_API_KEY", api_key);
+        }
+        if let Ok(base_url) = std::env::var("LETTA_BASE_URL") {
+            exec_opts = exec_opts.with_env("LETTA_BASE_URL", base_url);
+        }
+
+        let args_strs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let output = match sandbox.exec(command, &args_strs, exec_opts).await {
+            Ok(output) => output,
+            Err(e) => {
+                return ToolExecutionResult::failure(
+                    format!("Custom tool execution failed: {}", e),
+                    elapsed_ms(start_ms),
+                )
+            }
+        };
+
+        let duration = elapsed_ms(start_ms);
+        if output.is_success() {
+            ToolExecutionResult::success(output.stdout_string(), duration)
+        } else {
+            let error = output.stderr_string();
+            ToolExecutionResult::failure(
+                if error.is_empty() {
+                    "Custom tool execution failed".to_string()
+                } else {
+                    error
+                },
+                duration,
+            )
+        }
+    }
+
+    /// Build Python wrapper script
+    fn build_python_wrapper(name: &str, source_code: &str) -> String {
         let mut script = String::new();
         script.push_str("import json\nimport sys\n\n");
-        script.push_str(&custom_tool.source_code);
+        script.push_str(source_code);
         script.push_str("\n\n");
         script.push_str("def _kelpie_call(args):\n");
         script.push_str(&format!("    fn = globals().get(\"{}\")\n", name));
@@ -620,89 +1032,86 @@ impl UnifiedToolRegistry {
         script.push_str("    sys.stdout.write(result)\n\n");
         script.push_str("if __name__ == \"__main__\":\n");
         script.push_str("    _kelpie_main()\n");
-
-        let mut sandbox = ProcessSandbox::new(SandboxConfig::default());
-        if let Err(e) = sandbox.start().await {
-            return ToolExecutionResult::failure(
-                format!("Failed to start sandbox: {}", e),
-                start.elapsed().as_millis() as u64,
-            );
-        }
-
-        if !custom_tool.requirements.is_empty() {
-            let mut install_args = vec!["-m", "pip", "install"];
-            for requirement in &custom_tool.requirements {
-                install_args.push(requirement);
-            }
-
-            let install_output = sandbox
-                .exec(
-                    "python3",
-                    &install_args,
-                    ExecOptions::new().with_timeout(Duration::from_secs(120)),
-                )
-                .await;
-
-            if let Err(e) = install_output {
-                return ToolExecutionResult::failure(
-                    format!("Failed to install tool requirements: {}", e),
-                    start.elapsed().as_millis() as u64,
-                );
-            }
-        }
-
-        let mut exec_opts = ExecOptions::new()
-            .with_timeout(Duration::from_secs(30))
-            .with_max_output(1024 * 1024)
-            .with_stdin(serde_json::to_vec(input).unwrap_or_default());
-
-        if let Some(ctx) = context {
-            if let Some(agent_id) = &ctx.agent_id {
-                exec_opts = exec_opts.with_env("LETTA_AGENT_ID", agent_id.clone());
-            }
-            if let Some(project_id) = &ctx.project_id {
-                exec_opts = exec_opts.with_env("LETTA_PROJECT_ID", project_id.clone());
-            }
-        }
-
-        if let Ok(api_key) = std::env::var("LETTA_API_KEY") {
-            exec_opts = exec_opts.with_env("LETTA_API_KEY", api_key);
-        }
-        if let Ok(base_url) = std::env::var("LETTA_BASE_URL") {
-            exec_opts = exec_opts.with_env("LETTA_BASE_URL", base_url);
-        }
-
-        let output = match sandbox.exec("python3", &["-c", &script], exec_opts).await {
-            Ok(output) => output,
-            Err(e) => {
-                return ToolExecutionResult::failure(
-                    format!("Custom tool execution failed: {}", e),
-                    start.elapsed().as_millis() as u64,
-                )
-            }
-        };
-
-        let duration = start.elapsed().as_millis() as u64;
-        if output.is_success() {
-            ToolExecutionResult::success(output.stdout_string(), duration)
-        } else {
-            let error = output.stderr_string();
-            ToolExecutionResult::failure(
-                if error.is_empty() {
-                    "Custom tool execution failed".to_string()
-                } else {
-                    error
-                },
-                duration,
-            )
-        }
+        script
     }
 
-    /// Unregister a tool
+    /// Build JavaScript wrapper script
+    fn build_javascript_wrapper(name: &str, source_code: &str) -> String {
+        let mut script = String::new();
+        script.push_str(source_code);
+        script.push_str("\n\n");
+        script.push_str("(async function() {\n");
+        script.push_str("  let input = '';\n");
+        script.push_str("  process.stdin.setEncoding('utf8');\n");
+        script.push_str("  for await (const chunk of process.stdin) {\n");
+        script.push_str("    input += chunk;\n");
+        script.push_str("  }\n");
+        script.push_str("  const args = input ? JSON.parse(input) : {};\n");
+        script.push_str(&format!(
+            "  const fn = typeof {} === 'function' ? {} : null;\n",
+            name, name
+        ));
+        script.push_str("  if (!fn) {\n");
+        script.push_str(&format!(
+            "    throw new Error(\"Tool function '{}' not found\");\n",
+            name
+        ));
+        script.push_str("  }\n");
+        script.push_str("  let result = await fn(args);\n");
+        script.push_str("  if (typeof result !== 'string') {\n");
+        script.push_str("    result = JSON.stringify(result);\n");
+        script.push_str("  }\n");
+        script.push_str("  process.stdout.write(result);\n");
+        script.push_str("})();\n");
+        script
+    }
+
+    /// Build Shell wrapper script
+    fn build_shell_wrapper(input: &Value, source_code: &str) -> String {
+        let mut script = String::new();
+        script.push_str("#!/bin/bash\n");
+        script.push_str("set -e\n\n");
+
+        // Export input as environment variables if it's an object
+        if let Some(obj) = input.as_object() {
+            for (key, value) in obj {
+                let val_str = match value {
+                    Value::String(s) => s.clone(),
+                    _ => value.to_string(),
+                };
+                // Escape single quotes for bash
+                let escaped = val_str.replace('\'', "'\\''");
+                script.push_str(&format!(
+                    "export TOOL_{}='{}'\n",
+                    key.to_uppercase(),
+                    escaped
+                ));
+            }
+        }
+
+        script.push('\n');
+        script.push_str(source_code);
+        script
+    }
+
+    /// Unregister a tool from all registries
+    ///
+    /// Removes the tool from the main tools registry, builtin handlers, and custom tools.
+    /// Returns true if the tool was found and removed from any registry.
+    ///
+    /// TigerStyle: Cleanup operation for MCP server deletion or custom tool removal
     pub async fn unregister(&self, name: &str) -> bool {
+        assert!(!name.is_empty(), "tool name cannot be empty");
+
         let removed_tool = self.tools.write().await.remove(name).is_some();
         let removed_handler = self.builtin_handlers.write().await.remove(name).is_some();
-        removed_tool || removed_handler
+        let removed_custom = self.custom_tools.write().await.remove(name).is_some();
+
+        let removed = removed_tool || removed_handler || removed_custom;
+        if removed {
+            tracing::debug!(tool_name = %name, "Unregistered tool from registry");
+        }
+        removed
     }
 
     /// Clear all tools

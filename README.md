@@ -257,13 +257,17 @@ Environment variables:
 Kelpie supports two storage backends:
 
 1. **In-Memory (Default)**: Fast, non-persistent. Data is lost on restart.
-2. **FoundationDB**: Persistent, linearizable, distributed.
+2. **FoundationDB**: Persistent, linearizable, distributed (enabled by default).
 
 To use FoundationDB:
 
 ```bash
-# Build/run with fdb feature
-cargo run -p kelpie-server --features fdb -- --fdb-cluster-file /path/to/fdb.cluster
+# Run with FDB cluster file
+cargo run -p kelpie-server -- --fdb-cluster-file /path/to/fdb.cluster
+
+# Or just use cargo build/test (FDB is now compiled by default)
+cargo build
+cargo test
 ```
 
 ## Roadmap

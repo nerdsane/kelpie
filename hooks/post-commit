@@ -1,0 +1,46 @@
+#!/bin/bash
+# Kelpie Post-Commit Hook - Auto-Index Changed Files
+#
+# Phase 7.3: Automatically rebuild indexes after commits
+# TigerStyle: Keep indexes fresh, prevent staleness
+
+set -e
+
+# Colors for output
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+echo -e "${BLUE}📚 Kelpie Post-Commit: Updating indexes...${NC}"
+
+# Get the repository root
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT"
+
+# Get list of changed files in the last commit
+# Only include .rs and Cargo.toml files that affect indexes
+CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r HEAD | grep -E '\.(rs|toml)$' || true)
+
+if [ -z "$CHANGED_FILES" ]; then
+    echo "  No Rust files changed, indexes up-to-date"
+    exit 0
+fi
+
+# Count changed files
+FILE_COUNT=$(echo "$CHANGED_FILES" | wc -l | tr -d ' ')
+echo "  Changed files: $FILE_COUNT"
+
+# Run incremental indexer
+# Convert newline-separated list to space-separated arguments
+FILE_ARGS=$(echo "$CHANGED_FILES" | tr '\n' ' ')
+
+# Run the indexer (capture output to avoid noise)
+if cargo run --release -p kelpie-indexer -- incremental $FILE_ARGS > /tmp/kelpie-index.log 2>&1; then
+    echo -e "${GREEN}✓${NC} Indexes updated successfully"
+else
+    echo "⚠️  Index update failed (see /tmp/kelpie-index.log for details)"
+    echo "   This is not fatal, but indexes may be stale"
+    # Don't fail the commit, just warn
+fi
+
+echo ""

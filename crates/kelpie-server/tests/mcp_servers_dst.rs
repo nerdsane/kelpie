@@ -49,14 +49,15 @@ fn create_sse_config(url: &str) -> MCPServerConfig {
 // Basic CRUD Tests
 // =============================================================================
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_create_basic() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config)
         .run_async(|_env| async move {
-            let state = AppState::new();
+            let state = AppState::new(kelpie_core::current_runtime());
 
             // Create MCP server
             let server = state
@@ -86,14 +87,15 @@ async fn test_dst_mcp_server_create_basic() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_list_empty() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config)
         .run_async(|_env| async move {
-            let state = AppState::new();
+            let state = AppState::new(kelpie_core::current_runtime());
 
             // List should be empty
             let servers = state.list_mcp_servers().await;
@@ -106,14 +108,15 @@ async fn test_dst_mcp_server_list_empty() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_list_multiple() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config)
         .run_async(|_env| async move {
-            let state = AppState::new();
+            let state = AppState::new(kelpie_core::current_runtime());
 
             // Create multiple servers
             let server1 = state
@@ -141,14 +144,15 @@ async fn test_dst_mcp_server_list_multiple() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_update() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config)
         .run_async(|_env| async move {
-            let state = AppState::new();
+            let state = AppState::new(kelpie_core::current_runtime());
 
             // Create server
             let server = state
@@ -182,14 +186,15 @@ async fn test_dst_mcp_server_update() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_delete() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config)
         .run_async(|_env| async move {
-            let state = AppState::new();
+            let state = AppState::new(kelpie_core::current_runtime());
 
             // Create server
             let server = state
@@ -224,7 +229,8 @@ async fn test_dst_mcp_server_delete() {
 // Fault Injection Tests
 // =============================================================================
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_create_with_storage_faults() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -233,7 +239,7 @@ async fn test_dst_mcp_server_create_with_storage_faults() {
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.1))
         .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.05))
         .run_async(|_env| async move {
-            let state = AppState::new();
+            let state = AppState::new(kelpie_core::current_runtime());
 
             // Try to create servers - some may fail due to storage faults
             let mut created_count = 0;
@@ -266,7 +272,8 @@ async fn test_dst_mcp_server_create_with_storage_faults() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_update_with_faults() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -274,7 +281,7 @@ async fn test_dst_mcp_server_update_with_faults() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.15))
         .run_async(|_env| async move {
-            let state = AppState::new();
+            let state = AppState::new(kelpie_core::current_runtime());
 
             // Create server
             let server = state
@@ -304,14 +311,15 @@ async fn test_dst_mcp_server_update_with_faults() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_delete_idempotent() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config)
         .run_async(|_env| async move {
-            let state = AppState::new();
+            let state = AppState::new(kelpie_core::current_runtime());
 
             // Create server
             let server = state
@@ -336,7 +344,8 @@ async fn test_dst_mcp_server_delete_idempotent() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_concurrent_creates() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -344,13 +353,15 @@ async fn test_dst_mcp_server_concurrent_creates() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.1))
         .run_async(|_env| async move {
-            let state = AppState::new();
+            use kelpie_core::{current_runtime, Runtime};
+            let runtime = current_runtime();
+            let state = AppState::new(runtime.clone());
 
             // Create multiple servers concurrently
             let mut handles = vec![];
             for i in 0..5 {
                 let state_clone = state.clone();
-                let handle = tokio::spawn(async move {
+                let handle = runtime.spawn(async move {
                     state_clone
                         .create_mcp_server(
                             &format!("concurrent-{}", i),
@@ -388,14 +399,15 @@ async fn test_dst_mcp_server_concurrent_creates() {
 // Edge Cases
 // =============================================================================
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_update_nonexistent() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config)
         .run_async(|_env| async move {
-            let state = AppState::new();
+            let state = AppState::new(kelpie_core::current_runtime());
 
             // Try to update non-existent server
             let result = state
@@ -414,14 +426,15 @@ async fn test_dst_mcp_server_update_nonexistent() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_get_nonexistent() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config)
         .run_async(|_env| async move {
-            let state = AppState::new();
+            let state = AppState::new(kelpie_core::current_runtime());
 
             // Get non-existent server should return None
             let server = state.get_mcp_server("nonexistent-id").await;

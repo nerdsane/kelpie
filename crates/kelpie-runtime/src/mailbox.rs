@@ -2,11 +2,13 @@
 //!
 //! TigerStyle: Bounded queues with explicit limits, no silent drops.
 
-use bytes::Bytes;
-use kelpie_core::constants::MAILBOX_DEPTH_MAX;
 use std::collections::VecDeque;
-use std::time::Instant;
+
+use bytes::Bytes;
 use tokio::sync::oneshot;
+
+use kelpie_core::constants::MAILBOX_DEPTH_MAX;
+use kelpie_core::io::{TimeProvider, WallClockTime};
 
 /// Error when mailbox is full
 #[derive(Debug, Clone)]
@@ -36,16 +38,28 @@ pub struct Envelope {
     pub payload: Bytes,
     /// Channel to send the response
     pub reply_tx: oneshot::Sender<Result<Bytes, kelpie_core::Error>>,
-    /// When the message was enqueued
-    pub enqueued_at: Instant,
+    /// When the message was enqueued (monotonic timestamp in ms)
+    pub enqueued_at_ms: u64,
 }
 
 impl Envelope {
-    /// Create a new envelope
+    /// Create a new envelope using production wall clock
+    ///
+    /// For DST, use `new_with_time`.
     pub fn new(
         operation: String,
         payload: Bytes,
         reply_tx: oneshot::Sender<Result<Bytes, kelpie_core::Error>>,
+    ) -> Self {
+        Self::new_with_time(operation, payload, reply_tx, &WallClockTime::new())
+    }
+
+    /// Create a new envelope with injected time provider (for DST)
+    pub fn new_with_time(
+        operation: String,
+        payload: Bytes,
+        reply_tx: oneshot::Sender<Result<Bytes, kelpie_core::Error>>,
+        time: &dyn TimeProvider,
     ) -> Self {
         debug_assert!(!operation.is_empty(), "operation must not be empty");
 
@@ -53,13 +67,20 @@ impl Envelope {
             operation,
             payload,
             reply_tx,
-            enqueued_at: Instant::now(),
+            enqueued_at_ms: time.monotonic_ms(),
         }
     }
 
-    /// Get the time this message has been waiting
-    pub fn wait_time(&self) -> std::time::Duration {
-        self.enqueued_at.elapsed()
+    /// Get the time this message has been waiting in milliseconds
+    ///
+    /// For DST, use `wait_time_ms_with_time`.
+    pub fn wait_time_ms(&self) -> u64 {
+        self.wait_time_ms_with_time(&WallClockTime::new())
+    }
+
+    /// Get the time this message has been waiting in milliseconds with injected time (for DST)
+    pub fn wait_time_ms_with_time(&self, time: &dyn TimeProvider) -> u64 {
+        time.monotonic_ms().saturating_sub(self.enqueued_at_ms)
     }
 }
 

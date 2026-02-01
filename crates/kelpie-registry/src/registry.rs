@@ -8,9 +8,46 @@ use crate::node::{NodeId, NodeInfo, NodeStatus};
 use crate::placement::{ActorPlacement, PlacementContext, PlacementDecision, PlacementStrategy};
 use async_trait::async_trait;
 use kelpie_core::actor::ActorId;
+use kelpie_core::io::{RngProvider, StdRngProvider, TimeProvider, WallClockTime};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+// =============================================================================
+// Clock Abstraction (for backward compatibility)
+// =============================================================================
+
+/// Clock trait for time operations
+///
+/// This is a simpler synchronous trait for code that doesn't need async sleep.
+/// For full DST compatibility with sleep support, use `TimeProvider` instead.
+#[deprecated(
+    since = "0.2.0",
+    note = "Use TimeProvider from kelpie_core::io instead"
+)]
+pub trait Clock: Send + Sync {
+    /// Get the current time in milliseconds since Unix epoch
+    fn now_ms(&self) -> u64;
+}
+
+/// System clock implementation using WallClockTime
+#[deprecated(
+    since = "0.2.0",
+    note = "Use WallClockTime from kelpie_core::io instead"
+)]
+#[derive(Debug, Default)]
+pub struct SystemClock;
+
+#[allow(deprecated)]
+impl Clock for SystemClock {
+    fn now_ms(&self) -> u64 {
+        WallClockTime::new().now_ms()
+    }
+}
+
+// =============================================================================
+// Registry Trait
+// =============================================================================
 
 /// The registry trait for actor placement and node management
 ///
@@ -135,30 +172,15 @@ pub struct MemoryRegistry {
     placements: RwLock<HashMap<ActorId, ActorPlacement>>,
     /// Heartbeat tracker
     heartbeat_tracker: RwLock<HeartbeatTracker>,
-    /// Current timestamp source (for testing)
-    clock: Arc<dyn Clock>,
+    /// Time provider (for DST compatibility)
+    time: Arc<dyn TimeProvider>,
+    /// RNG provider (for DST compatibility)
+    rng: Arc<dyn RngProvider>,
+    /// Round-robin index for placement strategy
+    round_robin_index: std::sync::atomic::AtomicUsize,
 }
 
-/// Clock abstraction for testing
-pub trait Clock: Send + Sync {
-    /// Get the current time in milliseconds since Unix epoch
-    fn now_ms(&self) -> u64;
-}
-
-/// System clock implementation
-#[derive(Debug, Default)]
-pub struct SystemClock;
-
-impl Clock for SystemClock {
-    fn now_ms(&self) -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64
-    }
-}
-
-/// Mock clock for testing
+/// Mock clock for testing (implements TimeProvider)
 #[derive(Debug)]
 pub struct MockClock {
     time_ms: RwLock<u64>,
@@ -185,15 +207,25 @@ impl MockClock {
     }
 }
 
-impl Clock for MockClock {
+#[async_trait]
+impl TimeProvider for MockClock {
     fn now_ms(&self) -> u64 {
         // Use try_read for sync context, fallback to blocking
         self.time_ms.try_read().map(|t| *t).unwrap_or(0)
     }
+
+    async fn sleep_ms(&self, ms: u64) {
+        // In mock, just advance time
+        self.advance(ms).await;
+    }
+
+    fn monotonic_ms(&self) -> u64 {
+        self.now_ms()
+    }
 }
 
 impl MemoryRegistry {
-    /// Create a new in-memory registry
+    /// Create a new in-memory registry with production I/O providers
     pub fn new() -> Self {
         Self::with_config(HeartbeatConfig::default())
     }
@@ -204,17 +236,33 @@ impl MemoryRegistry {
             nodes: RwLock::new(HashMap::new()),
             placements: RwLock::new(HashMap::new()),
             heartbeat_tracker: RwLock::new(HeartbeatTracker::new(heartbeat_config)),
-            clock: Arc::new(SystemClock),
+            time: Arc::new(WallClockTime::new()),
+            rng: Arc::new(StdRngProvider::new()),
+            round_robin_index: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
-    /// Create with a mock clock for testing
-    pub fn with_clock(clock: Arc<dyn Clock>) -> Self {
+    /// Create with custom I/O providers (for DST)
+    pub fn with_providers(time: Arc<dyn TimeProvider>, rng: Arc<dyn RngProvider>) -> Self {
         Self {
             nodes: RwLock::new(HashMap::new()),
             placements: RwLock::new(HashMap::new()),
             heartbeat_tracker: RwLock::new(HeartbeatTracker::new(HeartbeatConfig::default())),
-            clock,
+            time,
+            rng,
+            round_robin_index: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// Create with a mock clock for testing (convenience method)
+    pub fn with_clock(clock: Arc<dyn TimeProvider>) -> Self {
+        Self {
+            nodes: RwLock::new(HashMap::new()),
+            placements: RwLock::new(HashMap::new()),
+            heartbeat_tracker: RwLock::new(HeartbeatTracker::new(HeartbeatConfig::default())),
+            time: clock,
+            rng: Arc::new(StdRngProvider::new()),
+            round_robin_index: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -222,7 +270,7 @@ impl MemoryRegistry {
     ///
     /// Returns list of nodes that transitioned to failed state.
     pub async fn check_heartbeat_timeouts(&self) -> Vec<NodeId> {
-        let now_ms = self.clock.now_ms();
+        let now_ms = self.time.now_ms();
         let mut tracker = self.heartbeat_tracker.write().await;
         let changes = tracker.check_all_timeouts(now_ms);
 
@@ -275,9 +323,34 @@ impl MemoryRegistry {
         if available.is_empty() {
             None
         } else {
-            let idx = rand::random::<usize>() % available.len();
+            // Use injected RNG provider for DST determinism
+            let idx = self.rng.gen_range(0, available.len() as u64) as usize;
             Some(available[idx].id.clone())
         }
+    }
+
+    /// Select node using round-robin strategy
+    async fn select_round_robin(&self) -> Option<NodeId> {
+        let nodes = self.nodes.read().await;
+        let mut available: Vec<_> = nodes
+            .values()
+            .filter(|n| n.status.can_accept_actors() && n.has_capacity())
+            .collect();
+
+        if available.is_empty() {
+            return None;
+        }
+
+        // Sort by node_id to ensure stable ordering
+        available.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
+
+        // Get and increment the round-robin index atomically
+        let current_idx = self
+            .round_robin_index
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let selected_idx = current_idx % available.len();
+
+        Some(available[selected_idx].id.clone())
     }
 }
 
@@ -301,7 +374,7 @@ impl Registry for MemoryRegistry {
 
         // Register with heartbeat tracker
         let mut tracker = self.heartbeat_tracker.write().await;
-        tracker.register_node(info.id.clone(), self.clock.now_ms());
+        tracker.register_node(info.id.clone(), self.time.now_ms());
 
         nodes.insert(info.id.clone(), info);
         Ok(())
@@ -352,7 +425,7 @@ impl Registry for MemoryRegistry {
     }
 
     async fn receive_heartbeat(&self, heartbeat: Heartbeat) -> RegistryResult<()> {
-        let now_ms = self.clock.now_ms();
+        let now_ms = self.time.now_ms();
 
         // Update heartbeat tracker
         let mut tracker = self.heartbeat_tracker.write().await;
@@ -445,7 +518,7 @@ impl Registry for MemoryRegistry {
         match node {
             Some(info) if info.has_capacity() && info.status.can_accept_actors() => {
                 // Claim the actor using the registry's clock for DST compatibility
-                let now_ms = self.clock.now_ms();
+                let now_ms = self.time.now_ms();
                 let placement =
                     ActorPlacement::with_timestamp(actor_id.clone(), node_id.clone(), now_ms);
                 placements.insert(actor_id, placement);
@@ -499,7 +572,7 @@ impl Registry for MemoryRegistry {
         }
 
         // Update placement
-        let now_ms = self.clock.now_ms();
+        let now_ms = self.time.now_ms();
         placement.migrate_to(to_node.clone(), now_ms);
 
         // Update node counts
@@ -538,11 +611,7 @@ impl Registry for MemoryRegistry {
                 // Fall back to least loaded
                 self.select_least_loaded().await
             }
-            PlacementStrategy::RoundRobin => {
-                // For simplicity, just use least loaded
-                // A true round-robin would need to track the last selected index
-                self.select_least_loaded().await
-            }
+            PlacementStrategy::RoundRobin => self.select_round_robin().await,
         };
 
         match node_id {
@@ -793,5 +862,118 @@ mod tests {
         // Verify node status changed
         let node = registry.get_node(&test_node_id(1)).await.unwrap().unwrap();
         assert_eq!(node.status, NodeStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn test_select_node_round_robin() {
+        let registry = MemoryRegistry::new();
+
+        // Register 3 nodes
+        registry.register_node(test_node_info(1)).await.unwrap();
+        registry.register_node(test_node_info(2)).await.unwrap();
+        registry.register_node(test_node_info(3)).await.unwrap();
+
+        // Request round-robin placements - should cycle through nodes
+        let mut selected_nodes = Vec::new();
+        for i in 1..=6 {
+            let context = PlacementContext::new(test_actor_id(i))
+                .with_strategy(PlacementStrategy::RoundRobin);
+            let decision = registry.select_node_for_placement(context).await.unwrap();
+
+            match decision {
+                PlacementDecision::New(node_id) => selected_nodes.push(node_id),
+                _ => panic!("expected New decision"),
+            }
+        }
+
+        // Nodes are sorted by id: node-1, node-2, node-3
+        // First cycle
+        assert_eq!(selected_nodes[0], test_node_id(1));
+        assert_eq!(selected_nodes[1], test_node_id(2));
+        assert_eq!(selected_nodes[2], test_node_id(3));
+        // Second cycle (wraps around)
+        assert_eq!(selected_nodes[3], test_node_id(1));
+        assert_eq!(selected_nodes[4], test_node_id(2));
+        assert_eq!(selected_nodes[5], test_node_id(3));
+    }
+
+    #[tokio::test]
+    async fn test_select_node_affinity() {
+        let registry = MemoryRegistry::new();
+
+        // Register 2 nodes
+        registry.register_node(test_node_info(1)).await.unwrap();
+        registry.register_node(test_node_info(2)).await.unwrap();
+
+        // Request placement with affinity to node-2
+        let context = PlacementContext::new(test_actor_id(1)).with_preferred_node(test_node_id(2));
+        let decision = registry.select_node_for_placement(context).await.unwrap();
+
+        match decision {
+            PlacementDecision::New(node_id) => assert_eq!(node_id, test_node_id(2)),
+            _ => panic!("expected New decision"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_select_node_affinity_fallback() {
+        let registry = MemoryRegistry::new();
+
+        // Register node-1 only (node-2 doesn't exist)
+        registry.register_node(test_node_info(1)).await.unwrap();
+
+        // Request placement with affinity to non-existent node-2
+        let context = PlacementContext::new(test_actor_id(1)).with_preferred_node(test_node_id(2));
+        let decision = registry.select_node_for_placement(context).await.unwrap();
+
+        // Should fall back to node-1 (least loaded)
+        match decision {
+            PlacementDecision::New(node_id) => assert_eq!(node_id, test_node_id(1)),
+            _ => panic!("expected New decision"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_select_node_random() {
+        let registry = MemoryRegistry::new();
+
+        // Register 3 nodes
+        registry.register_node(test_node_info(1)).await.unwrap();
+        registry.register_node(test_node_info(2)).await.unwrap();
+        registry.register_node(test_node_info(3)).await.unwrap();
+
+        // Request random placement - should select one of the available nodes
+        let context =
+            PlacementContext::new(test_actor_id(1)).with_strategy(PlacementStrategy::Random);
+        let decision = registry.select_node_for_placement(context).await.unwrap();
+
+        match decision {
+            PlacementDecision::New(node_id) => {
+                // Should be one of our nodes
+                assert!(
+                    node_id == test_node_id(1)
+                        || node_id == test_node_id(2)
+                        || node_id == test_node_id(3)
+                );
+            }
+            _ => panic!("expected New decision"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_select_node_no_capacity() {
+        let registry = MemoryRegistry::new();
+
+        // Register a node at capacity
+        let mut info = test_node_info(1);
+        info.actor_capacity = 100;
+        info.actor_count = 100; // At capacity
+        registry.register_node(info).await.unwrap();
+
+        // Request placement - should return NoCapacity
+        let context = PlacementContext::new(test_actor_id(1));
+        let decision = registry.select_node_for_placement(context).await.unwrap();
+
+        assert!(matches!(decision, PlacementDecision::NoCapacity));
     }
 }

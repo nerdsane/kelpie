@@ -10,23 +10,30 @@ description = "VM core types and backend implementations for Kelpie"
 
 [features]
 default = []
-firecracker = ["dep:kelpie-sandbox"]
-vz = []
+firecracker = ["dep:kelpie-sandbox", "kelpie-sandbox/firecracker"]
+libkrun = ["dep:kelpie-sandbox"]
+# Enable automatic image download (requires reqwest and sha2)
+image-download = ["dep:reqwest", "dep:sha2", "dep:hex"]
 
 [dependencies]
 async-trait = { workspace = true }
 bytes = { workspace = true }
+chrono = { workspace = true }
 crc32fast = { workspace = true }
+dirs = "5.0"
+hex = { version = "0.4", optional = true }
 libc = "0.2"
+reqwest = { version = "0.12", features = ["rustls-tls"], optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { version = "0.10", optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
 kelpie-core = { workspace = true }
-kelpie-sandbox = { workspace = true, optional = true, features = ["firecracker"] }
+kelpie-sandbox = { workspace = true, optional = true }
 
 [build-dependencies]
-cc = "1.0"
+pkg-config = "0.3"

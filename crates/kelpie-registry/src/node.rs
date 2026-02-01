@@ -4,10 +4,10 @@
 
 use crate::error::{RegistryError, RegistryResult};
 use kelpie_core::constants::CLUSTER_NODES_COUNT_MAX;
+use kelpie_core::io::{RngProvider, StdRngProvider, TimeProvider, WallClockTime};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::net::SocketAddr;
-use std::time::Duration;
 
 /// Maximum length of a node ID in bytes
 pub const NODE_ID_LENGTH_BYTES_MAX: usize = 128;
@@ -81,12 +81,19 @@ impl NodeId {
     }
 
     /// Generate a unique node ID based on hostname and random suffix
+    ///
+    /// Uses production RNG. For DST, use `generate_with_rng`.
     pub fn generate() -> Self {
+        Self::generate_with_rng(&StdRngProvider::new())
+    }
+
+    /// Generate a unique node ID with injected RNG (for DST)
+    pub fn generate_with_rng(rng: &dyn RngProvider) -> Self {
         let hostname = hostname::get()
             .map(|h| h.to_string_lossy().to_string())
             .unwrap_or_else(|_| "unknown".to_string());
 
-        let suffix: u32 = rand::random();
+        let suffix: u32 = rng.next_u64() as u32;
         let id = format!("{}-{:08x}", hostname, suffix);
 
         // Truncate if too long
@@ -184,18 +191,20 @@ pub struct NodeInfo {
 }
 
 impl NodeInfo {
-    /// Create new node info
+    /// Create new node info using production wall clock
+    ///
+    /// For DST, use `with_timestamp` or `new_with_time`.
     ///
     /// # Arguments
     /// * `id` - The node's unique identifier
     /// * `rpc_addr` - The node's RPC address for inter-node communication
     pub fn new(id: NodeId, rpc_addr: SocketAddr) -> Self {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_millis() as u64;
+        Self::new_with_time(id, rpc_addr, &WallClockTime::new())
+    }
 
-        Self::with_timestamp(id, rpc_addr, now_ms)
+    /// Create new node info with injected time provider (for DST)
+    pub fn new_with_time(id: NodeId, rpc_addr: SocketAddr, time: &dyn TimeProvider) -> Self {
+        Self::with_timestamp(id, rpc_addr, time.now_ms())
     }
 
     /// Create new node info with a specific timestamp

@@ -10,13 +10,14 @@ use axum::http::{Request, StatusCode};
 use bytes::Bytes;
 use chrono::TimeZone;
 use kelpie_core::Error;
+use kelpie_core::TimeProvider;
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
 use kelpie_server::api;
 use kelpie_server::http::{HttpClient, HttpRequest, HttpResponse};
 use kelpie_server::llm::{LlmClient, LlmConfig};
 use kelpie_server::models::{CreateAgentRequest, MessageRole};
 use kelpie_server::state::AppState;
-use kelpie_server::storage::SimStorage;
+use kelpie_server::storage::KvAdapter;
 use kelpie_server::tools::{
     register_memory_tools, register_run_code_tool, register_web_search_tool,
 };
@@ -45,15 +46,40 @@ fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         .expect("env lock poisoned")
 }
 
-struct StubHttpClient {
+/// FaultInjectedHttpClient replaces StubHttpClient with full DST fault injection support.
+///
+/// TigerStyle: Supports NetworkDelay, HttpConnectionFail, HttpTimeout, HttpServerError,
+/// LlmTimeout, and LlmRateLimited faults for deterministic testing.
+struct FaultInjectedHttpClient {
     faults: Arc<kelpie_dst::FaultInjector>,
+    time: Arc<dyn TimeProvider>,
+    rng: Arc<kelpie_dst::DeterministicRng>,
 }
 
 #[async_trait]
-impl HttpClient for StubHttpClient {
+impl HttpClient for FaultInjectedHttpClient {
     async fn send(&self, _request: HttpRequest) -> Result<HttpResponse, String> {
+        // Check for fault injection
         if let Some(fault) = self.faults.should_inject("http_send") {
             match fault {
+                FaultType::NetworkDelay { min_ms, max_ms } => {
+                    let delay = min_ms + (self.rng.next_u64() % (max_ms - min_ms + 1));
+                    self.time.sleep_ms(delay).await;
+                }
+                FaultType::HttpConnectionFail => {
+                    return Err("Connection failed (fault injected)".to_string());
+                }
+                FaultType::HttpTimeout { timeout_ms } => {
+                    self.time.sleep_ms(timeout_ms).await;
+                    return Err(format!("Timeout after {}ms (fault injected)", timeout_ms));
+                }
+                FaultType::HttpServerError { status } => {
+                    return Ok(HttpResponse {
+                        status,
+                        headers: HashMap::new(),
+                        body: format!("Server error {} (fault injected)", status).into_bytes(),
+                    });
+                }
                 FaultType::LlmTimeout => {
                     return Err("LLM request timed out".to_string());
                 }
@@ -76,11 +102,31 @@ impl HttpClient for StubHttpClient {
         _request: HttpRequest,
     ) -> Result<Pin<Box<dyn futures::stream::Stream<Item = Result<Bytes, String>> + Send>>, String>
     {
-        Err("streaming not supported in StubHttpClient".to_string())
+        // Check for fault injection on streaming requests
+        if let Some(fault) = self.faults.should_inject("http_send_streaming") {
+            match fault {
+                FaultType::HttpConnectionFail => {
+                    return Err("Connection failed (fault injected)".to_string());
+                }
+                FaultType::HttpTimeout { timeout_ms } => {
+                    self.time.sleep_ms(timeout_ms).await;
+                    return Err(format!(
+                        "Streaming timeout after {}ms (fault injected)",
+                        timeout_ms
+                    ));
+                }
+                FaultType::LlmTimeout => {
+                    return Err("LLM streaming request timed out".to_string());
+                }
+                _ => {}
+            }
+        }
+        Err("streaming not supported in FaultInjectedHttpClient".to_string())
     }
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_summarization_with_llm_faults() {
     let config = SimConfig::new(8801);
 
@@ -88,8 +134,10 @@ async fn test_dst_summarization_with_llm_faults() {
         .with_fault(FaultConfig::new(FaultType::LlmTimeout, 0.4).with_filter("http_send"))
         .with_fault(FaultConfig::new(FaultType::LlmRateLimited, 0.2).with_filter("http_send"))
         .run_async(|sim_env| async move {
-            let sim_http = Arc::new(StubHttpClient {
+            let sim_http = Arc::new(FaultInjectedHttpClient {
                 faults: sim_env.faults.clone(),
+                time: sim_env.io_context.time.clone(),
+                rng: Arc::new(sim_env.rng.fork()),
             });
             let llm_config = LlmConfig {
                 base_url: "http://example.com".to_string(),
@@ -98,7 +146,7 @@ async fn test_dst_summarization_with_llm_faults() {
                 max_tokens: 128,
             };
             let llm = LlmClient::with_http_client(llm_config, sim_http);
-            let state = AppState::with_llm(llm);
+            let state = AppState::with_llm(kelpie_core::current_runtime(), llm);
 
             let agent = state
                 .create_agent_async(CreateAgentRequest {
@@ -114,11 +162,19 @@ async fn test_dst_summarization_with_llm_faults() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 })
                 .await
                 .map_err(|e| Error::Internal {
                     message: format!("create_agent_async failed: {}", e),
                 })?;
+
+            // Use simulated time for determinism
+            // TigerStyle: No fallback to chrono::Utc::now() - that would break determinism
+            let sim_time_ms = sim_env.io_context.time.now_ms() as i64;
+            let created_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(sim_time_ms)
+                .expect("timestamp conversion failed - sim_time_ms out of range for chrono");
 
             state
                 .add_message(
@@ -130,8 +186,11 @@ async fn test_dst_summarization_with_llm_faults() {
                         role: MessageRole::User,
                         content: "Summarize this".to_string(),
                         tool_call_id: None,
-                        tool_calls: None,
-                        created_at: chrono::Utc::now(),
+                        tool_calls: vec![],
+                        tool_call: None,
+                        tool_return: None,
+                        status: None,
+                        created_at,
                     },
                 )
                 .map_err(|e| Error::Internal {
@@ -171,14 +230,18 @@ async fn test_dst_summarization_with_llm_faults() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_scheduling_job_write_fault() {
     let config = SimConfig::new(8802);
 
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("job_write"))
         .run_async(|_sim_env| async move {
-            let state = AppState::with_fault_injector(_sim_env.faults.clone());
+            let state = AppState::with_fault_injector(
+                kelpie_core::current_runtime(),
+                _sim_env.faults.clone(),
+            );
             let app = api::router(state);
 
             let response = app
@@ -214,14 +277,18 @@ async fn test_dst_scheduling_job_write_fault() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_projects_write_fault() {
     let config = SimConfig::new(8803);
 
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("project_write"))
         .run_async(|sim_env| async move {
-            let state = AppState::with_fault_injector(sim_env.faults.clone());
+            let state = AppState::with_fault_injector(
+                kelpie_core::current_runtime(),
+                sim_env.faults.clone(),
+            );
             let app = api::router(state);
 
             let response = app
@@ -253,14 +320,18 @@ async fn test_dst_projects_write_fault() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_batch_status_write_fault() {
     let config = SimConfig::new(8804);
 
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("batch_write"))
         .run_async(|sim_env| async move {
-            let state = AppState::with_fault_injector(sim_env.faults.clone());
+            let state = AppState::with_fault_injector(
+                kelpie_core::current_runtime(),
+                sim_env.faults.clone(),
+            );
             let app = api::router(state);
 
             let response = app
@@ -295,7 +366,8 @@ async fn test_dst_batch_status_write_fault() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_group_write_fault() {
     let config = SimConfig::new(8805);
 
@@ -304,7 +376,10 @@ async fn test_dst_agent_group_write_fault() {
             FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("agent_group_write"),
         )
         .run_async(|sim_env| async move {
-            let state = AppState::with_fault_injector(sim_env.faults.clone());
+            let state = AppState::with_fault_injector(
+                kelpie_core::current_runtime(),
+                sim_env.faults.clone(),
+            );
             let app = api::router(state);
 
             let response = app
@@ -337,15 +412,21 @@ async fn test_dst_agent_group_write_fault() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_custom_tool_storage_fault() {
     let config = SimConfig::new(8806);
 
     let result = Simulation::new(config)
-        .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("tool_write"))
+        .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("storage_write"))
         .run_async(|sim_env| async move {
-            let storage = Arc::new(SimStorage::with_fault_injector(sim_env.faults.clone()));
-            let state = AppState::with_storage_and_faults(storage, sim_env.faults.clone());
+            let adapter = KvAdapter::with_dst_storage(sim_env.rng.fork(), sim_env.faults.clone());
+            let storage = Arc::new(adapter);
+            let state = AppState::with_storage_and_faults(
+                kelpie_core::current_runtime(),
+                storage,
+                sim_env.faults.clone(),
+            );
 
             let result = state
                 .register_tool(
@@ -366,14 +447,18 @@ async fn test_dst_custom_tool_storage_fault() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_conversation_search_date_with_faults() {
     let config = SimConfig::new(8807);
 
     let result = Simulation::new(config)
-        .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.5).with_filter("message_read"))
+        .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.5).with_filter("storage_read"))
         .run_async(|sim_env| async move {
-            let state = AppState::with_fault_injector(sim_env.faults.clone());
+            let state = AppState::with_fault_injector(
+                kelpie_core::current_runtime(),
+                sim_env.faults.clone(),
+            );
             let registry = state.tool_registry();
             register_memory_tools(registry, state.clone()).await;
 
@@ -391,6 +476,8 @@ async fn test_dst_conversation_search_date_with_faults() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 })
                 .await
                 .map_err(|e| Error::Internal {
@@ -410,7 +497,10 @@ async fn test_dst_conversation_search_date_with_faults() {
                         role: MessageRole::User,
                         content: "hello in range".to_string(),
                         tool_call_id: None,
-                        tool_calls: None,
+                        tool_calls: vec![],
+                        tool_call: None,
+                        tool_return: None,
+                        status: None,
                         created_at: in_range_time,
                     },
                 )
@@ -428,7 +518,10 @@ async fn test_dst_conversation_search_date_with_faults() {
                         role: MessageRole::User,
                         content: "hello old".to_string(),
                         tool_call_id: None,
-                        tool_calls: None,
+                        tool_calls: vec![],
+                        tool_call: None,
+                        tool_return: None,
+                        status: None,
                         created_at: out_range_time,
                     },
                 )
@@ -463,7 +556,8 @@ async fn test_dst_conversation_search_date_with_faults() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_web_search_missing_api_key() {
     let config = SimConfig::new(8808);
 
@@ -476,7 +570,7 @@ async fn test_dst_web_search_missing_api_key() {
                 let prev_key = std::env::var("TAVILY_API_KEY").ok();
                 std::env::set_var("TAVILY_API_KEY", "");
 
-                state = AppState::new();
+                state = AppState::new(kelpie_core::current_runtime());
                 registry = state.tool_registry();
 
                 if let Some(prev) = prev_key {
@@ -505,13 +599,14 @@ async fn test_dst_web_search_missing_api_key() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_run_code_unsupported_language() {
     let config = SimConfig::new(8809);
 
     let result = Simulation::new(config)
         .run_async(|_sim_env| async move {
-            let state = AppState::new();
+            let state = AppState::new(kelpie_core::current_runtime());
             let registry = state.tool_registry();
             register_run_code_tool(registry).await;
 
@@ -535,14 +630,21 @@ async fn test_dst_run_code_unsupported_language() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_export_with_message_read_fault() {
     let config = SimConfig::new(8810);
 
     let result = Simulation::new(config)
+        // Messages are stored in memory, not in KvAdapter storage.
+        // list_messages checks for "message_read" fault injection.
         .with_fault(FaultConfig::new(FaultType::StorageReadFail, 1.0).with_filter("message_read"))
         .run_async(|sim_env| async move {
-            let state = AppState::with_fault_injector(sim_env.faults.clone());
+            // Use fault injector for message read faults (in-memory message storage)
+            let state = AppState::with_fault_injector(
+                kelpie_core::current_runtime(),
+                sim_env.faults.clone(),
+            );
             let agent = state
                 .create_agent_async(CreateAgentRequest {
                     name: "export-fault-agent".to_string(),
@@ -557,6 +659,8 @@ async fn test_dst_export_with_message_read_fault() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 })
                 .await
                 .map_err(|e| Error::Internal {
@@ -573,7 +677,10 @@ async fn test_dst_export_with_message_read_fault() {
                         role: MessageRole::User,
                         content: "export message".to_string(),
                         tool_call_id: None,
-                        tool_calls: None,
+                        tool_calls: vec![],
+                        tool_call: None,
+                        tool_return: None,
+                        status: None,
                         created_at: chrono::Utc.with_ymd_and_hms(2025, 2, 1, 0, 0, 0).unwrap(),
                     },
                 )
@@ -581,7 +688,7 @@ async fn test_dst_export_with_message_read_fault() {
                     message: format!("add_message failed: {}", e),
                 })?;
 
-            let app = api::router(state);
+            let app = api::router(state.clone());
             let response = app
                 .oneshot(
                     Request::builder()
@@ -596,26 +703,34 @@ async fn test_dst_export_with_message_read_fault() {
                 .await
                 .unwrap();
 
-            assert_eq!(response.status(), StatusCode::OK);
-            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            // Parse response body first to debug
+            let status = response.status();
+            let body_bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
                 .await
                 .unwrap();
-            let exported: Result<kelpie_server::models::ExportAgentResponse, _> =
-                serde_json::from_slice(&body);
-            let exported = match exported {
-                Ok(payload) => payload,
-                Err(err) => {
-                    let body_str = String::from_utf8_lossy(&body);
-                    panic!(
-                        "failed to parse export response: {} (body: {})",
-                        err, body_str
-                    );
-                }
-            };
+            let body_str = String::from_utf8_lossy(&body_bytes);
 
-            if !exported.messages.is_empty() {
-                assert_eq!(exported.messages[0].content, "export message");
-            }
+            // Export is resilient to message read failures - it returns 200 with empty messages
+            // rather than propagating the error. This tests that behavior.
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "Expected 200 OK, got {} with body: {}",
+                status,
+                body_str
+            );
+
+            // Parse response and verify messages are empty/absent due to read fault
+            // Note: messages field is skipped when empty due to #[serde(skip_serializing_if = "Vec::is_empty")]
+            let export: serde_json::Value = serde_json::from_slice(&body_bytes)
+                .unwrap_or_else(|_| panic!("Failed to parse response as JSON: {}", body_str));
+            let messages = export.get("messages").and_then(|m| m.as_array());
+            let message_count = messages.map(|m| m.len()).unwrap_or(0);
+            assert!(
+                message_count == 0,
+                "Expected empty/absent messages due to read fault, got {} messages",
+                message_count
+            );
 
             Ok(())
         })
@@ -624,14 +739,21 @@ async fn test_dst_export_with_message_read_fault() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_import_with_message_write_fault() {
     let config = SimConfig::new(8811);
 
     let result = Simulation::new(config)
+        // Messages are stored in memory, not in KvAdapter storage.
+        // import_messages checks for "message_write" fault injection via add_message.
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 1.0).with_filter("message_write"))
         .run_async(|sim_env| async move {
-            let state = AppState::with_fault_injector(sim_env.faults.clone());
+            // Use fault injector for message write faults (in-memory message storage)
+            let state = AppState::with_fault_injector(
+                kelpie_core::current_runtime(),
+                sim_env.faults.clone(),
+            );
             let app = api::router(state);
 
             let response = app
@@ -645,21 +767,15 @@ async fn test_dst_import_with_message_write_fault() {
                                 "agent": {
                                     "name": "import-fault-agent",
                                     "agent_type": "letta_v1_agent",
-                                    "model": null,
-                                    "system": null,
-                                    "description": null,
                                     "blocks": [],
                                     "tool_ids": [],
                                     "tags": [],
-                                    "metadata": {},
-                                    "project_id": null
+                                    "metadata": {}
                                 },
                                 "messages": [
                                     {
                                         "role": "user",
-                                        "content": "import message",
-                                        "tool_call_id": null,
-                                        "tool_calls": null
+                                        "content": "import message"
                                     }
                                 ]
                             })
@@ -670,7 +786,24 @@ async fn test_dst_import_with_message_write_fault() {
                 .await
                 .unwrap();
 
+            // Import is resilient to message write failures - it returns 200 with agent created
+            // but logs a warning about failed message import. This tests that behavior.
             assert_eq!(response.status(), StatusCode::OK);
+
+            // Parse response and verify agent was created successfully
+            let body_bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap();
+            let agent: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+            assert!(
+                agent.get("id").is_some(),
+                "Expected agent to be created despite message write fault"
+            );
+            assert_eq!(
+                agent.get("name").and_then(|n| n.as_str()),
+                Some("import-fault-agent")
+            );
+
             Ok(())
         })
         .await;

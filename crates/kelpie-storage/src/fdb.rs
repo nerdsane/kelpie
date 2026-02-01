@@ -23,6 +23,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use foundationdb::api::{FdbApiBuilder, NetworkAutoStop};
+use foundationdb::options::StreamingMode;
 use foundationdb::tuple::Subspace;
 use foundationdb::{Database, RangeOption, Transaction as FdbTransaction};
 use kelpie_core::constants::{
@@ -263,7 +264,7 @@ use std::collections::HashMap;
 pub struct FdbActorTransaction {
     /// Actor ID this transaction is scoped to
     actor_id: ActorId,
-    /// Reference to the FDB KV store (cloned, shares Arc<Database> internally)
+    /// Reference to the FDB KV store (cloned, shares `Arc<Database>` internally)
     kv: FdbKV,
     /// Buffered writes: key -> Some(value) for set, None for delete
     write_buffer: HashMap<Vec<u8>, Option<Vec<u8>>>,
@@ -612,7 +613,10 @@ impl ActorKV for FdbKV {
             reason: format!("create transaction failed: {}", e),
         })?;
 
-        let range_option = RangeOption::from((start_key.as_slice(), end_key.as_slice()));
+        let mut range_option = RangeOption::from((start_key.as_slice(), end_key.as_slice()));
+        // TigerStyle: Use WantAll streaming mode to fetch all results in one batch
+        // Default mode (Iterator) returns one chunk at a time, causing partial results
+        range_option.mode = StreamingMode::WantAll;
 
         let range =
             txn.get_range(&range_option, 1, false)
@@ -672,7 +676,10 @@ impl ActorKV for FdbKV {
             reason: format!("create transaction failed: {}", e),
         })?;
 
-        let range_option = RangeOption::from((start_key.as_slice(), end_key.as_slice()));
+        let mut range_option = RangeOption::from((start_key.as_slice(), end_key.as_slice()));
+        // TigerStyle: Use WantAll streaming mode to fetch all results in one batch
+        // Default mode (Iterator) returns one chunk at a time, causing partial results
+        range_option.mode = StreamingMode::WantAll;
 
         let range =
             txn.get_range(&range_option, 1, false)

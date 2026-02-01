@@ -1,0 +1,1333 @@
+{
+  "version": "1.0.0",
+  "generated_at": "2026-01-30T16:11:55.195636+00:00",
+  "crates": [
+    {
+      "crate_name": "kelpie-core",
+      "dependencies": [
+        {
+          "name": "anyhow",
+          "version": "^1.0"
+        },
+        {
+          "name": "async-trait",
+          "version": "^0.1"
+        },
+        {
+          "name": "bytes",
+          "version": "^1.5",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "chrono",
+          "version": "=0.4.38",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "madsim",
+          "version": "^0.2"
+        },
+        {
+          "name": "once_cell",
+          "version": "^1.19"
+        },
+        {
+          "name": "opentelemetry",
+          "version": "^0.21"
+        },
+        {
+          "name": "opentelemetry-otlp",
+          "version": "^0.14",
+          "features": [
+            "tonic"
+          ]
+        },
+        {
+          "name": "opentelemetry-prometheus",
+          "version": "^0.14"
+        },
+        {
+          "name": "opentelemetry_sdk",
+          "version": "^0.21",
+          "features": [
+            "rt-tokio"
+          ]
+        },
+        {
+          "name": "prometheus",
+          "version": "^0.13"
+        },
+        {
+          "name": "serde",
+          "version": "^1.0",
+          "features": [
+            "derive"
+          ]
+        },
+        {
+          "name": "serde_json",
+          "version": "^1.0"
+        },
+        {
+          "name": "thiserror",
+          "version": "^1.0"
+        },
+        {
+          "name": "tokio",
+          "version": "^1.34",
+          "features": [
+            "full",
+            "time"
+          ]
+        },
+        {
+          "name": "tracing",
+          "version": "^0.1"
+        },
+        {
+          "name": "tracing-opentelemetry",
+          "version": "^0.22"
+        },
+        {
+          "name": "tracing-subscriber",
+          "version": "^0.3",
+          "features": [
+            "env-filter"
+          ]
+        }
+      ],
+      "dev_dependencies": [
+        {
+          "name": "proptest",
+          "version": "^1.4",
+          "is_dev": true
+        }
+      ],
+      "build_dependencies": []
+    },
+    {
+      "crate_name": "kelpie-runtime",
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "version": "^0.1"
+        },
+        {
+          "name": "bytes",
+          "version": "^1.5",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "futures",
+          "version": "^0.3"
+        },
+        {
+          "name": "kelpie-core",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core"
+        },
+        {
+          "name": "kelpie-registry",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-registry"
+        },
+        {
+          "name": "kelpie-storage",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-storage"
+        },
+        {
+          "name": "serde",
+          "version": "^1.0",
+          "features": [
+            "derive"
+          ]
+        },
+        {
+          "name": "serde_json",
+          "version": "^1.0"
+        },
+        {
+          "name": "thiserror",
+          "version": "^1.0"
+        },
+        {
+          "name": "tokio",
+          "version": "^1.34",
+          "features": [
+            "full"
+          ]
+        },
+        {
+          "name": "tracing",
+          "version": "^0.1"
+        }
+      ],
+      "dev_dependencies": [
+        {
+          "name": "kelpie-dst",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst",
+          "is_dev": true
+        },
+        {
+          "name": "proptest",
+          "version": "^1.4",
+          "is_dev": true
+        }
+      ],
+      "build_dependencies": []
+    },
+    {
+      "crate_name": "kelpie-registry",
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "version": "^0.1"
+        },
+        {
+          "name": "bytes",
+          "version": "^1.5",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "chrono",
+          "version": "=0.4.38",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "foundationdb",
+          "version": "^0.10",
+          "features": [
+            "fdb-7_3"
+          ]
+        },
+        {
+          "name": "hostname",
+          "version": "^0.4"
+        },
+        {
+          "name": "kelpie-core",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core"
+        },
+        {
+          "name": "kelpie-storage",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-storage"
+        },
+        {
+          "name": "rand",
+          "version": "^0.8"
+        },
+        {
+          "name": "serde",
+          "version": "^1.0",
+          "features": [
+            "derive"
+          ]
+        },
+        {
+          "name": "serde_json",
+          "version": "^1.0"
+        },
+        {
+          "name": "thiserror",
+          "version": "^1.0"
+        },
+        {
+          "name": "tokio",
+          "version": "^1.34",
+          "features": [
+            "full"
+          ]
+        },
+        {
+          "name": "tracing",
+          "version": "^0.1"
+        }
+      ],
+      "dev_dependencies": [
+        {
+          "name": "kelpie-dst",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst",
+          "is_dev": true
+        },
+        {
+          "name": "proptest",
+          "version": "^1.4",
+          "is_dev": true
+        }
+      ],
+      "build_dependencies": []
+    },
+    {
+      "crate_name": "kelpie-storage",
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "version": "^0.1"
+        },
+        {
+          "name": "bytes",
+          "version": "^1.5",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "foundationdb",
+          "version": "^0.10",
+          "features": [
+            "fdb-7_3"
+          ]
+        },
+        {
+          "name": "kelpie-core",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core"
+        },
+        {
+          "name": "thiserror",
+          "version": "^1.0"
+        },
+        {
+          "name": "tokio",
+          "version": "^1.34",
+          "features": [
+            "full"
+          ]
+        },
+        {
+          "name": "tracing",
+          "version": "^0.1"
+        }
+      ],
+      "dev_dependencies": [
+        {
+          "name": "kelpie-dst",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst",
+          "is_dev": true
+        },
+        {
+          "name": "proptest",
+          "version": "^1.4",
+          "is_dev": true
+        }
+      ],
+      "build_dependencies": []
+    },
+    {
+      "crate_name": "kelpie-dst",
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "version": "^0.1"
+        },
+        {
+          "name": "bytes",
+          "version": "^1.5",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "chrono",
+          "version": "=0.4.38",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "crc32fast",
+          "version": "^1.3"
+        },
+        {
+          "name": "futures",
+          "version": "^0.3"
+        },
+        {
+          "name": "kelpie-core",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core"
+        },
+        {
+          "name": "kelpie-sandbox",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-sandbox"
+        },
+        {
+          "name": "kelpie-storage",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-storage"
+        },
+        {
+          "name": "kelpie-vm",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-vm"
+        },
+        {
+          "name": "madsim",
+          "version": "^0.2"
+        },
+        {
+          "name": "rand",
+          "version": "^0.8"
+        },
+        {
+          "name": "rand_chacha",
+          "version": "^0.3"
+        },
+        {
+          "name": "serde",
+          "version": "^1.0",
+          "features": [
+            "derive"
+          ]
+        },
+        {
+          "name": "serde_json",
+          "version": "^1.0"
+        },
+        {
+          "name": "thiserror",
+          "version": "^1.0"
+        },
+        {
+          "name": "tokio",
+          "version": "^1.34",
+          "features": [
+            "full"
+          ]
+        },
+        {
+          "name": "tracing",
+          "version": "^0.1"
+        }
+      ],
+      "dev_dependencies": [
+        {
+          "name": "async-trait",
+          "version": "^0.1",
+          "is_dev": true
+        },
+        {
+          "name": "bytes",
+          "version": "^1.5",
+          "is_dev": true,
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "kelpie-cluster",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-cluster",
+          "is_dev": true
+        },
+        {
+          "name": "kelpie-memory",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-memory",
+          "is_dev": true
+        },
+        {
+          "name": "kelpie-registry",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-registry",
+          "is_dev": true
+        },
+        {
+          "name": "kelpie-runtime",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-runtime",
+          "is_dev": true
+        },
+        {
+          "name": "kelpie-sandbox",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-sandbox",
+          "is_dev": true
+        },
+        {
+          "name": "kelpie-server",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server",
+          "is_dev": true
+        },
+        {
+          "name": "kelpie-tools",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-tools",
+          "is_dev": true
+        },
+        {
+          "name": "madsim",
+          "version": "^0.2",
+          "is_dev": true
+        },
+        {
+          "name": "proptest",
+          "version": "^1.4",
+          "is_dev": true
+        },
+        {
+          "name": "serde",
+          "version": "^1.0",
+          "is_dev": true,
+          "features": [
+            "derive"
+          ]
+        },
+        {
+          "name": "serde_json",
+          "version": "^1.0",
+          "is_dev": true
+        },
+        {
+          "name": "stateright",
+          "version": "^0.30",
+          "is_dev": true
+        },
+        {
+          "name": "tracing-subscriber",
+          "version": "^0.3",
+          "is_dev": true,
+          "features": [
+            "env-filter"
+          ]
+        },
+        {
+          "name": "uuid",
+          "version": "^1.6",
+          "is_dev": true,
+          "features": [
+            "v4",
+            "v5",
+            "serde"
+          ]
+        }
+      ],
+      "build_dependencies": []
+    },
+    {
+      "crate_name": "kelpie-sandbox",
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "version": "^0.1"
+        },
+        {
+          "name": "bytes",
+          "version": "^1.5",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "chrono",
+          "version": "=0.4.38",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "crc32fast",
+          "version": "^1.3"
+        },
+        {
+          "name": "futures",
+          "version": "^0.3"
+        },
+        {
+          "name": "kelpie-core",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core"
+        },
+        {
+          "name": "serde",
+          "version": "^1.0",
+          "features": [
+            "derive"
+          ]
+        },
+        {
+          "name": "serde_json",
+          "version": "^1.0"
+        },
+        {
+          "name": "thiserror",
+          "version": "^1.0"
+        },
+        {
+          "name": "tokio",
+          "version": "^1.34",
+          "features": [
+            "full"
+          ]
+        },
+        {
+          "name": "tracing",
+          "version": "^0.1"
+        },
+        {
+          "name": "uuid",
+          "version": "^1.6",
+          "features": [
+            "v4",
+            "serde"
+          ]
+        }
+      ],
+      "dev_dependencies": [
+        {
+          "name": "tokio",
+          "version": "^1.34",
+          "is_dev": true,
+          "features": [
+            "full",
+            "test-util",
+            "macros"
+          ]
+        }
+      ],
+      "build_dependencies": []
+    },
+    {
+      "crate_name": "kelpie-vm",
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "version": "^0.1"
+        },
+        {
+          "name": "bytes",
+          "version": "^1.5",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "crc32fast",
+          "version": "^1.3"
+        },
+        {
+          "name": "kelpie-core",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core"
+        },
+        {
+          "name": "kelpie-sandbox",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-sandbox",
+          "features": [
+            "firecracker"
+          ]
+        },
+        {
+          "name": "libc",
+          "version": "^0.2"
+        },
+        {
+          "name": "serde",
+          "version": "^1.0",
+          "features": [
+            "derive"
+          ]
+        },
+        {
+          "name": "serde_json",
+          "version": "^1.0"
+        },
+        {
+          "name": "thiserror",
+          "version": "^1.0"
+        },
+        {
+          "name": "tokio",
+          "version": "^1.34",
+          "features": [
+            "full"
+          ]
+        },
+        {
+          "name": "tracing",
+          "version": "^0.1"
+        },
+        {
+          "name": "uuid",
+          "version": "^1.6",
+          "features": [
+            "v4",
+            "v5",
+            "serde"
+          ]
+        }
+      ],
+      "dev_dependencies": [],
+      "build_dependencies": [
+        {
+          "name": "cc",
+          "version": "^1.0",
+          "is_build": true
+        }
+      ]
+    },
+    {
+      "crate_name": "kelpie-cluster",
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "version": "^0.1"
+        },
+        {
+          "name": "bytes",
+          "version": "^1.5",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "futures",
+          "version": "^0.3"
+        },
+        {
+          "name": "kelpie-core",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core"
+        },
+        {
+          "name": "kelpie-registry",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-registry"
+        },
+        {
+          "name": "kelpie-runtime",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-runtime"
+        },
+        {
+          "name": "serde",
+          "version": "^1.0",
+          "features": [
+            "derive"
+          ]
+        },
+        {
+          "name": "serde_json",
+          "version": "^1.0"
+        },
+        {
+          "name": "thiserror",
+          "version": "^1.0"
+        },
+        {
+          "name": "tokio",
+          "version": "^1.34",
+          "features": [
+            "full"
+          ]
+        },
+        {
+          "name": "tracing",
+          "version": "^0.1"
+        }
+      ],
+      "dev_dependencies": [
+        {
+          "name": "kelpie-dst",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst",
+          "is_dev": true
+        },
+        {
+          "name": "proptest",
+          "version": "^1.4",
+          "is_dev": true
+        }
+      ],
+      "build_dependencies": []
+    },
+    {
+      "crate_name": "kelpie-memory",
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "version": "^0.1"
+        },
+        {
+          "name": "bytes",
+          "version": "^1.5",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "chrono",
+          "version": "=0.4.38",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "fastembed",
+          "version": "^5.4"
+        },
+        {
+          "name": "kelpie-core",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core"
+        },
+        {
+          "name": "kelpie-storage",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-storage"
+        },
+        {
+          "name": "serde",
+          "version": "^1.0",
+          "features": [
+            "derive"
+          ]
+        },
+        {
+          "name": "serde_json",
+          "version": "^1.0"
+        },
+        {
+          "name": "tokio",
+          "version": "^1.34",
+          "features": [
+            "full"
+          ]
+        },
+        {
+          "name": "tracing",
+          "version": "^0.1"
+        },
+        {
+          "name": "uuid",
+          "version": "^1.6",
+          "features": [
+            "v4",
+            "serde"
+          ]
+        }
+      ],
+      "dev_dependencies": [
+        {
+          "name": "tokio",
+          "version": "^1.34",
+          "is_dev": true,
+          "features": [
+            "full",
+            "test-util",
+            "macros"
+          ]
+        }
+      ],
+      "build_dependencies": []
+    },
+    {
+      "crate_name": "kelpie-server",
+      "dependencies": [
+        {
+          "name": "anyhow",
+          "version": "^1.0"
+        },
+        {
+          "name": "async-trait",
+          "version": "^0.1"
+        },
+        {
+          "name": "axum",
+          "version": "^0.7",
+          "features": [
+            "macros"
+          ]
+        },
+        {
+          "name": "bytes",
+          "version": "^1.5",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "chrono",
+          "version": "=0.4.38",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "clap",
+          "version": "^4.4",
+          "features": [
+            "derive"
+          ]
+        },
+        {
+          "name": "croner",
+          "version": "^2"
+        },
+        {
+          "name": "foundationdb",
+          "version": "^0.10",
+          "features": [
+            "fdb-7_3"
+          ]
+        },
+        {
+          "name": "futures",
+          "version": "^0.3"
+        },
+        {
+          "name": "kelpie-core",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core"
+        },
+        {
+          "name": "kelpie-dst",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst"
+        },
+        {
+          "name": "kelpie-runtime",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-runtime"
+        },
+        {
+          "name": "kelpie-sandbox",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-sandbox"
+        },
+        {
+          "name": "kelpie-storage",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-storage"
+        },
+        {
+          "name": "kelpie-tools",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-tools"
+        },
+        {
+          "name": "kelpie-vm",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-vm"
+        },
+        {
+          "name": "prometheus",
+          "version": "^0.13"
+        },
+        {
+          "name": "reqwest",
+          "version": "^0.12",
+          "features": [
+            "json"
+          ]
+        },
+        {
+          "name": "serde",
+          "version": "^1.0",
+          "features": [
+            "derive"
+          ]
+        },
+        {
+          "name": "serde_json",
+          "version": "^1.0"
+        },
+        {
+          "name": "subtle",
+          "version": "^2.5"
+        },
+        {
+          "name": "thiserror",
+          "version": "^1.0"
+        },
+        {
+          "name": "tokio",
+          "version": "^1.34",
+          "features": [
+            "full"
+          ]
+        },
+        {
+          "name": "tokio-stream",
+          "version": "^0.1"
+        },
+        {
+          "name": "tower",
+          "version": "^0.4"
+        },
+        {
+          "name": "tower-http",
+          "version": "^0.5",
+          "features": [
+            "cors",
+            "trace",
+            "normalize-path"
+          ]
+        },
+        {
+          "name": "tracing",
+          "version": "^0.1"
+        },
+        {
+          "name": "tracing-subscriber",
+          "version": "^0.3",
+          "features": [
+            "env-filter"
+          ]
+        },
+        {
+          "name": "umi-memory",
+          "version": "*"
+        },
+        {
+          "name": "uuid",
+          "version": "^1.6",
+          "features": [
+            "v4",
+            "v5",
+            "serde"
+          ]
+        }
+      ],
+      "dev_dependencies": [
+        {
+          "name": "anyhow",
+          "version": "^1.0",
+          "is_dev": true
+        },
+        {
+          "name": "kelpie-dst",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst",
+          "is_dev": true
+        },
+        {
+          "name": "kelpie-tools",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-tools",
+          "is_dev": true,
+          "features": [
+            "dst"
+          ]
+        },
+        {
+          "name": "madsim",
+          "version": "^0.2",
+          "is_dev": true
+        },
+        {
+          "name": "mockito",
+          "version": "^1.5",
+          "is_dev": true
+        },
+        {
+          "name": "tokio-test",
+          "version": "^0.4",
+          "is_dev": true
+        },
+        {
+          "name": "tower",
+          "version": "^0.4",
+          "is_dev": true,
+          "features": [
+            "util"
+          ]
+        }
+      ],
+      "build_dependencies": []
+    },
+    {
+      "crate_name": "kelpie-tools",
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "version": "^0.1"
+        },
+        {
+          "name": "bytes",
+          "version": "^1.5",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "chrono",
+          "version": "=0.4.38",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "futures",
+          "version": "^0.3"
+        },
+        {
+          "name": "kelpie-core",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core"
+        },
+        {
+          "name": "kelpie-dst",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst"
+        },
+        {
+          "name": "kelpie-sandbox",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-sandbox"
+        },
+        {
+          "name": "reqwest",
+          "version": "^0.12",
+          "features": [
+            "json"
+          ]
+        },
+        {
+          "name": "reqwest-eventsource",
+          "version": "^0.6"
+        },
+        {
+          "name": "serde",
+          "version": "^1.0",
+          "features": [
+            "derive"
+          ]
+        },
+        {
+          "name": "serde_json",
+          "version": "^1.0"
+        },
+        {
+          "name": "thiserror",
+          "version": "^1.0"
+        },
+        {
+          "name": "tokio",
+          "version": "^1.34",
+          "features": [
+            "full"
+          ]
+        },
+        {
+          "name": "tracing",
+          "version": "^0.1"
+        },
+        {
+          "name": "uuid",
+          "version": "^1.6",
+          "features": [
+            "v4",
+            "serde"
+          ]
+        }
+      ],
+      "dev_dependencies": [
+        {
+          "name": "tokio",
+          "version": "^1.34",
+          "is_dev": true,
+          "features": [
+            "full"
+          ]
+        },
+        {
+          "name": "tracing-subscriber",
+          "version": "^0.3",
+          "is_dev": true,
+          "features": [
+            "env-filter"
+          ]
+        }
+      ],
+      "build_dependencies": []
+    },
+    {
+      "crate_name": "kelpie-wasm",
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "version": "^0.1"
+        },
+        {
+          "name": "bytes",
+          "version": "^1.5",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "kelpie-core",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core"
+        },
+        {
+          "name": "kelpie-dst",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst"
+        },
+        {
+          "name": "kelpie-runtime",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-runtime"
+        },
+        {
+          "name": "serde_json",
+          "version": "^1.0"
+        },
+        {
+          "name": "thiserror",
+          "version": "^1.0"
+        },
+        {
+          "name": "tokio",
+          "version": "^1.34",
+          "features": [
+            "full"
+          ]
+        },
+        {
+          "name": "tracing",
+          "version": "^0.1"
+        },
+        {
+          "name": "wasi-cap-std-sync",
+          "version": "^16"
+        },
+        {
+          "name": "wasi-common",
+          "version": "^16"
+        },
+        {
+          "name": "wasmtime",
+          "version": "^16"
+        },
+        {
+          "name": "wasmtime-wasi",
+          "version": "^16"
+        }
+      ],
+      "dev_dependencies": [
+        {
+          "name": "kelpie-dst",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst",
+          "is_dev": true
+        },
+        {
+          "name": "proptest",
+          "version": "^1.4",
+          "is_dev": true
+        }
+      ],
+      "build_dependencies": []
+    },
+    {
+      "crate_name": "kelpie-cli",
+      "dependencies": [
+        {
+          "name": "anyhow",
+          "version": "^1.0"
+        },
+        {
+          "name": "chrono",
+          "version": "=0.4.38",
+          "features": [
+            "serde"
+          ]
+        },
+        {
+          "name": "clap",
+          "version": "^4.4",
+          "features": [
+            "derive"
+          ]
+        },
+        {
+          "name": "colored",
+          "version": "^2.1"
+        },
+        {
+          "name": "dirs",
+          "version": "^5.0"
+        },
+        {
+          "name": "futures",
+          "version": "^0.3"
+        },
+        {
+          "name": "kelpie-core",
+          "version": "*",
+          "path": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core"
+        },
+        {
+          "name": "reqwest",
+          "version": "^0.12",
+          "features": [
+            "json",
+            "json",
+            "stream"
+          ]
+        },
+        {
+          "name": "rustyline",
+          "version": "^13"
+        },
+        {
+          "name": "serde",
+          "version": "^1.0",
+          "features": [
+            "derive"
+          ]
+        },
+        {
+          "name": "serde_json",
+          "version": "^1.0"
+        },
+        {
+          "name": "tokio",
+          "version": "^1.34",
+          "features": [
+            "full"
+          ]
+        },
+        {
+          "name": "tokio-stream",
+          "version": "^0.1"
+        },
+        {
+          "name": "tracing",
+          "version": "^0.1"
+        },
+        {
+          "name": "tracing-subscriber",
+          "version": "^0.3",
+          "features": [
+            "env-filter"
+          ]
+        }
+      ],
+      "dev_dependencies": [],
+      "build_dependencies": []
+    }
+  ]
+}

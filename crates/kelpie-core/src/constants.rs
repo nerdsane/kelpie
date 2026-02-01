@@ -22,8 +22,10 @@ pub const ACTOR_KV_KEY_SIZE_BYTES_MAX: usize = 10 * 1024;
 /// Maximum size of actor KV value in bytes (1 MB)
 pub const ACTOR_KV_VALUE_SIZE_BYTES_MAX: usize = 1024 * 1024;
 
-/// Maximum duration for an actor invocation in milliseconds (30 sec)
-pub const ACTOR_INVOCATION_TIMEOUT_MS_MAX: u64 = 30 * 1000;
+/// Maximum duration for an actor invocation in milliseconds (2 min)
+/// TigerStyle: LLM API calls (especially with tool use) can take 30-60+ seconds.
+/// 120 seconds provides margin for slow API responses while preventing runaway tasks.
+pub const ACTOR_INVOCATION_TIMEOUT_MS_MAX: u64 = 120 * 1000;
 
 /// Default idle timeout before actor deactivation in milliseconds (5 min)
 pub const ACTOR_IDLE_TIMEOUT_MS_DEFAULT: u64 = 5 * 60 * 1000;

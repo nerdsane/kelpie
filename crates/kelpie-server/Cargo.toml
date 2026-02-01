@@ -9,10 +9,14 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-default = []
+default = ["fdb"]
 otel = ["kelpie-core/otel", "prometheus"]
 dst = ["kelpie-tools/dst", "dep:kelpie-dst"]
 fdb = ["dep:foundationdb", "kelpie-storage/fdb"]
+madsim = ["kelpie-core/madsim", "kelpie-dst?/madsim"]
+# libkrun sandbox support (macOS ARM64 and Linux)
+# Enables LibkrunSandbox for per-agent VM isolation
+libkrun = ["kelpie-vm/libkrun"]
 
 [dependencies]
 # Core kelpie crates
@@ -54,6 +58,12 @@ bytes = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 
+# Global state (for test sessions)
+once_cell = { workspace = true }
+
+# Cron scheduling
+croner = { workspace = true }
+
 # HTTP client for LLM APIs
 reqwest = { workspace = true }
 
@@ -73,6 +83,9 @@ kelpie-dst = { workspace = true, optional = true }
 # FoundationDB storage (optional, with fdb feature)
 foundationdb = { workspace = true, optional = true }
 
+# Constant-time comparison for security
+subtle = "2.5"
+
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
 kelpie-dst = { workspace = true }
@@ -80,3 +93,7 @@ kelpie-tools = { workspace = true, features = ["dst"] }
 anyhow = { workspace = true }
 tokio-test = "0.4"
 mockito = "1.5"
+madsim = "0.2"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(madsim)'] }

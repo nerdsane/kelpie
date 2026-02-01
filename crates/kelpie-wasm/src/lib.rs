@@ -1,19 +1,17 @@
-//! Kelpie WASM
+//! Kelpie WASM Runtime
 //!
-//! WASM actor runtime for polyglot actor support.
+//! WASM tool execution for polyglot tool support.
+//!
+//! TigerStyle: Secure sandboxed execution with explicit resource limits.
 //!
 //! # Overview
 //!
 //! Provides:
-//! - wasmtime integration
-//! - waPC protocol implementation
-//! - WASM module loading and caching
-//! - Cross-language actor invocation
+//! - wasmtime integration for WASM module execution
+//! - Module caching for performance
+//! - Memory and execution time limits
+//! - JSON input/output for tool interface
 
-// Modules will be implemented in Phase 4
-// pub mod module;
-// pub mod runtime;
-// pub mod wapc;
+mod runtime;
 
-/// Placeholder for Phase 4 implementation
-pub struct WasmRuntime;
+pub use runtime::{WasmConfig, WasmError, WasmRuntime, WasmToolResult};

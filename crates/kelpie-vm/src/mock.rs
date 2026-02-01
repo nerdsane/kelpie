@@ -2,6 +2,9 @@
 //!
 //! TigerStyle: Simulated VM with configurable behavior for testing.
 
+// Allow direct tokio usage in test/mock code
+#![allow(clippy::disallowed_methods)]
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;

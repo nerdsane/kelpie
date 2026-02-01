@@ -8,6 +8,7 @@
 use crate::api::ApiError;
 use axum::{extract::Path, routing::post, Router};
 use axum::{extract::State, Json};
+use kelpie_core::Runtime;
 use kelpie_server::llm::ChatMessage;
 use kelpie_server::models::MessageRole;
 use kelpie_server::state::AppState;
@@ -57,7 +58,7 @@ pub struct SummarizationResponse {
 }
 
 /// Create summarization routes
-pub fn router() -> Router<AppState> {
+pub fn router<R: Runtime + 'static>() -> Router<AppState<R>> {
     Router::new()
         .route("/:agent_id/messages/summarize", post(summarize_messages))
         .route("/:agent_id/memory/summarize", post(summarize_memory))
@@ -67,8 +68,8 @@ pub fn router() -> Router<AppState> {
 ///
 /// POST /v1/agents/{agent_id}/messages/summarize
 #[instrument(skip(state, request), fields(agent_id = %agent_id), level = "info")]
-async fn summarize_messages(
-    State(state): State<AppState>,
+async fn summarize_messages<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
     Json(request): Json<SummarizeMessagesRequest>,
 ) -> Result<Json<SummarizationResponse>, ApiError> {
@@ -163,8 +164,8 @@ async fn summarize_messages(
 ///
 /// POST /v1/agents/{agent_id}/memory/summarize
 #[instrument(skip(state, request), fields(agent_id = %agent_id), level = "info")]
-async fn summarize_memory(
-    State(state): State<AppState>,
+async fn summarize_memory<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
     Json(request): Json<SummarizeMemoryRequest>,
 ) -> Result<Json<SummarizationResponse>, ApiError> {
@@ -279,20 +280,86 @@ fn role_to_display(role: &MessageRole) -> &str {
 mod tests {
     use super::*;
     use crate::api;
+    use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
+    use kelpie_core::Runtime;
+    use kelpie_dst::{DeterministicRng, FaultInjector, SimStorage};
+    use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
+    use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
     use kelpie_server::models::AgentState;
+    use kelpie_server::service::AgentService;
+    use kelpie_server::tools::UnifiedToolRegistry;
+    use std::sync::Arc;
     use tower::ServiceExt;
 
-    /// Create test app without LLM configured
+    /// Mock LLM client for testing
+    struct MockLlmClient;
+
+    #[async_trait]
+    impl LlmClient for MockLlmClient {
+        async fn complete_with_tools(
+            &self,
+            _messages: Vec<LlmMessage>,
+            _tools: Vec<kelpie_server::llm::ToolDefinition>,
+        ) -> kelpie_core::Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: "Test response".to_string(),
+                tool_calls: vec![],
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stop_reason: "end_turn".to_string(),
+            })
+        }
+
+        async fn continue_with_tool_result(
+            &self,
+            _messages: Vec<LlmMessage>,
+            _tools: Vec<kelpie_server::llm::ToolDefinition>,
+            _assistant_blocks: Vec<kelpie_server::llm::ContentBlock>,
+            _tool_results: Vec<(String, String)>,
+        ) -> kelpie_core::Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: "Test response".to_string(),
+                tool_calls: vec![],
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stop_reason: "end_turn".to_string(),
+            })
+        }
+    }
+
+    /// Create test app with AgentService (single source of truth)
     ///
     /// Note: These tests focus on validation and error handling.
     /// LLM integration is tested separately with real LLM clients in integration tests.
     async fn test_app() -> Router {
-        // Use basic AppState without LLM for these tests
-        let state = AppState::new();
+        let llm: Arc<dyn LlmClient> = Arc::new(MockLlmClient);
+        let actor = AgentActor::new(llm, Arc::new(UnifiedToolRegistry::new()));
+        let factory = Arc::new(CloneFactory::new(actor));
 
+        let rng = DeterministicRng::new(42);
+        let faults = Arc::new(FaultInjector::new(rng.fork()));
+        let storage = SimStorage::new(rng.fork(), faults);
+        let kv = Arc::new(storage);
+
+        let runtime = kelpie_core::TokioRuntime;
+
+        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState, _>::new(
+            factory,
+            kv,
+            DispatcherConfig::default(),
+            runtime.clone(),
+        );
+        let handle = dispatcher.handle();
+
+        drop(runtime.spawn(async move {
+            dispatcher.run().await;
+        }));
+
+        let service = AgentService::new(handle.clone());
+        let state = AppState::with_agent_service(runtime, service, handle);
         api::router(state)
     }
 

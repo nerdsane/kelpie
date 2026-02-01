@@ -9,6 +9,12 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
+# IMPORTANT: madsim is enabled by default for true deterministic simulation testing.
+# Without madsim, tokio's task scheduler is non-deterministic, meaning same seed
+# does NOT guarantee same task interleaving order.
+# See: https://github.com/rita-aga/kelpie/issues/15
+default = ["madsim"]
+madsim = ["dep:madsim"]
 firecracker = ["kelpie-vm/firecracker"]
 
 [dependencies]
@@ -29,16 +35,23 @@ async-trait = { workspace = true }
 tokio = { workspace = true }
 serde_json = { workspace = true }
 
+# Madsim (optional, enabled with "madsim" feature for deterministic testing)
+madsim = { version = "0.2", optional = true }
+
 [dev-dependencies]
+async-trait = { workspace = true }
 kelpie-cluster = { workspace = true }
 kelpie-memory = { workspace = true }
 kelpie-registry = { workspace = true }
 kelpie-runtime = { workspace = true }
 kelpie-sandbox = { workspace = true }
+kelpie-server = { workspace = true }
 kelpie-tools = { workspace = true }
+uuid = { workspace = true }
 bytes = { workspace = true }
 proptest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 stateright = { workspace = true }
 tracing-subscriber = { workspace = true }
+madsim = "0.2"

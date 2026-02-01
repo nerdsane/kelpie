@@ -269,10 +269,13 @@ Before marking work complete:
 | Category | Fault Types |
 |----------|-------------|
 | Storage | `StorageWriteFail`, `StorageReadFail`, `StorageCorruption`, `StorageLatency`, `DiskFull` |
+| Storage Semantics (FDB-critical) | `StorageMisdirectedWrite`, `StoragePartialWrite`, `StorageFsyncFail`, `StorageUnflushedLoss` |
 | Crash | `CrashBeforeWrite`, `CrashAfterWrite`, `CrashDuringTransaction` |
 | Network | `NetworkPartition`, `NetworkDelay`, `NetworkPacketLoss`, `NetworkMessageReorder` |
+| Network Infrastructure (FDB-critical) | `NetworkPacketCorruption`, `NetworkJitter`, `NetworkConnectionExhaustion` |
 | Time | `ClockSkew`, `ClockJump` |
-| Resource | `OutOfMemory`, `CPUStarvation` |
+| Resource | `OutOfMemory`, `CPUStarvation`, `ResourceFdExhaustion` |
+| Distributed Coordination (FDB-critical) | `ClusterSplitBrain`, `ReplicationLag`, `QuorumLoss` |
 
 ### Critical Paths Requiring DST Coverage
 

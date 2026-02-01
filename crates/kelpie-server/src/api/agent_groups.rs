@@ -9,6 +9,7 @@ use axum::{
     Json, Router,
 };
 use chrono::Utc;
+use kelpie_core::Runtime;
 use kelpie_server::llm::ChatMessage;
 use kelpie_server::models::{
     AgentGroup, CreateAgentGroupRequest, CreateMessageRequest, RoutingPolicy,
@@ -51,7 +52,7 @@ pub struct GroupMessageItem {
 }
 
 /// Create agent group routes
-pub fn router() -> Router<AppState> {
+pub fn router<R: Runtime + 'static>() -> Router<AppState<R>> {
     Router::new()
         .route("/agent-groups", get(list_groups).post(create_group))
         .route(
@@ -62,13 +63,16 @@ pub fn router() -> Router<AppState> {
 }
 
 /// Create a new agent group
-#[instrument(skip(state, request), fields(name = %request.name), level = "info")]
-async fn create_group(
-    State(state): State<AppState>,
+#[instrument(skip(state, request), level = "info")]
+pub async fn create_group<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Json(request): Json<CreateAgentGroupRequest>,
 ) -> Result<Json<AgentGroup>, ApiError> {
-    if request.name.trim().is_empty() {
-        return Err(ApiError::bad_request("group name cannot be empty"));
+    // Validate name if provided
+    if let Some(ref name) = request.name {
+        if name.trim().is_empty() {
+            return Err(ApiError::bad_request("group name cannot be empty"));
+        }
     }
 
     // Validate agent IDs
@@ -81,7 +85,7 @@ async fn create_group(
     }
 
     let group = AgentGroup::from_request(request);
-    state.add_agent_group(group.clone())?;
+    state.add_agent_group(group.clone()).await?;
 
     tracing::info!(group_id = %group.id, "created agent group");
     Ok(Json(group))
@@ -89,8 +93,8 @@ async fn create_group(
 
 /// List agent groups
 #[instrument(skip(state, query), level = "info")]
-async fn list_groups(
-    State(state): State<AppState>,
+pub async fn list_groups<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Query(query): Query<ListGroupsQuery>,
 ) -> Result<Json<ListGroupsResponse>, ApiError> {
     let (mut groups, _) = state.list_agent_groups(None)?;
@@ -128,8 +132,8 @@ async fn list_groups(
 
 /// Get agent group details
 #[instrument(skip(state), fields(group_id = %group_id), level = "info")]
-async fn get_group(
-    State(state): State<AppState>,
+pub async fn get_group<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(group_id): Path<String>,
 ) -> Result<Json<AgentGroup>, ApiError> {
     let group = state
@@ -140,8 +144,8 @@ async fn get_group(
 
 /// Update agent group
 #[instrument(skip(state, request), fields(group_id = %group_id), level = "info")]
-async fn update_group(
-    State(state): State<AppState>,
+pub async fn update_group<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(group_id): Path<String>,
     Json(request): Json<UpdateAgentGroupRequest>,
 ) -> Result<Json<AgentGroup>, ApiError> {
@@ -163,24 +167,24 @@ async fn update_group(
         group.last_routed_index = 0;
     }
 
-    state.update_agent_group(group.clone())?;
+    state.update_agent_group(group.clone()).await?;
     Ok(Json(group))
 }
 
 /// Delete agent group
 #[instrument(skip(state), fields(group_id = %group_id), level = "info")]
-async fn delete_group(
-    State(state): State<AppState>,
+pub async fn delete_group<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(group_id): Path<String>,
 ) -> Result<(), ApiError> {
-    state.delete_agent_group(&group_id)?;
+    state.delete_agent_group(&group_id).await?;
     Ok(())
 }
 
 /// Send message to agent group
 #[instrument(skip(state, request), fields(group_id = %group_id), level = "info")]
-async fn send_group_message(
-    State(state): State<AppState>,
+async fn send_group_message<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(group_id): Path<String>,
     Json(request): Json<CreateMessageRequest>,
 ) -> Result<Json<GroupMessageResponse>, ApiError> {
@@ -221,6 +225,17 @@ async fn send_group_message(
                 send_to_agent(&state, &agent_id, &content_with_context, request.clone()).await?;
             vec![GroupMessageItem { agent_id, response }]
         }
+        // Letta compatibility - these types fall back to round_robin for now
+        RoutingPolicy::Supervisor
+        | RoutingPolicy::Dynamic
+        | RoutingPolicy::Sleeptime
+        | RoutingPolicy::VoiceSleeptime
+        | RoutingPolicy::Swarm => {
+            let agent_id = select_round_robin(&mut group)?;
+            let response =
+                send_to_agent(&state, &agent_id, &content_with_context, request.clone()).await?;
+            vec![GroupMessageItem { agent_id, response }]
+        }
     };
 
     for item in &responses {
@@ -228,7 +243,7 @@ async fn send_group_message(
     }
 
     group.updated_at = Utc::now();
-    state.update_agent_group(group)?;
+    state.update_agent_group(group).await?;
 
     Ok(Json(GroupMessageResponse { responses }))
 }
@@ -244,8 +259,8 @@ fn select_round_robin(group: &mut AgentGroup) -> Result<String, ApiError> {
     Ok(agent_id)
 }
 
-async fn select_intelligent(
-    state: &AppState,
+async fn select_intelligent<R: Runtime + 'static>(
+    state: &AppState<R>,
     group: &AgentGroup,
     content: &str,
 ) -> Result<String, ApiError> {
@@ -304,8 +319,8 @@ fn append_shared_state(group: &mut AgentGroup, agent_id: &str, response: &Value)
     }
 }
 
-async fn send_to_agent(
-    state: &AppState,
+async fn send_to_agent<R: Runtime + 'static>(
+    state: &AppState<R>,
     agent_id: &str,
     content: &str,
     request: CreateMessageRequest,

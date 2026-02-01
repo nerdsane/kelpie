@@ -1,1 +1,0 @@
-"""Kelpie client tests."""

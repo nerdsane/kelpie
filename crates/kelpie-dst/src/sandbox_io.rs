@@ -4,7 +4,7 @@
 //!
 //! This module provides `SimSandboxIO`, an implementation of the `SandboxIO` trait
 //! that runs entirely in-memory with fault injection. When combined with
-//! `GenericSandbox<SimSandboxIO>`, you get a sandbox that:
+//! `GenericSandbox`<`SimSandboxIO`>, you get a sandbox that:
 //!
 //! 1. Runs the SAME state machine code as production
 //! 2. Uses simulated I/O instead of real VMs
@@ -375,7 +375,7 @@ use kelpie_core::TimeProvider;
 use kelpie_sandbox::io::GenericSandbox;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Factory for creating GenericSandbox<SimSandboxIO> instances
+/// Factory for creating `GenericSandbox`<`SimSandboxIO`> instances
 #[derive(Clone)]
 pub struct SimSandboxIOFactory {
     /// Shared RNG

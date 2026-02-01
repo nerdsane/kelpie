@@ -13,18 +13,18 @@ use std::time::Duration;
 /// Provides a location-transparent reference to an actor. The handle can be
 /// cloned and shared across tasks/threads.
 #[derive(Clone)]
-pub struct ActorHandle {
+pub struct ActorHandle<R: kelpie_core::Runtime> {
     /// The actor's reference
     actor_ref: ActorRef,
     /// Dispatcher handle for routing
-    dispatcher: DispatcherHandle,
+    dispatcher: DispatcherHandle<R>,
     /// Default timeout for invocations
     default_timeout: Option<Duration>,
 }
 
-impl ActorHandle {
+impl<R: kelpie_core::Runtime> ActorHandle<R> {
     /// Create a new actor handle
-    pub fn new(actor_ref: ActorRef, dispatcher: DispatcherHandle) -> Self {
+    pub fn new(actor_ref: ActorRef, dispatcher: DispatcherHandle<R>) -> Self {
         Self {
             actor_ref,
             dispatcher,
@@ -53,12 +53,19 @@ impl ActorHandle {
         let operation = operation.into();
 
         match self.default_timeout {
-            Some(timeout) => tokio::time::timeout(timeout, self.invoke_inner(&operation, payload))
+            Some(timeout) => {
+                let runtime = kelpie_core::current_runtime();
+                kelpie_core::Runtime::timeout(
+                    &runtime,
+                    timeout,
+                    self.invoke_inner(&operation, payload),
+                )
                 .await
                 .map_err(|_| Error::OperationTimedOut {
                     operation: operation.clone(),
                     timeout_ms: timeout.as_millis() as u64,
-                })?,
+                })?
+            }
             None => self.invoke_inner(&operation, payload).await,
         }
     }
@@ -108,18 +115,18 @@ impl ActorHandle {
 }
 
 /// Builder for creating actor handles
-pub struct ActorHandleBuilder {
-    dispatcher: DispatcherHandle,
+pub struct ActorHandleBuilder<R: kelpie_core::Runtime> {
+    dispatcher: DispatcherHandle<R>,
 }
 
-impl ActorHandleBuilder {
+impl<R: kelpie_core::Runtime> ActorHandleBuilder<R> {
     /// Create a new builder
-    pub fn new(dispatcher: DispatcherHandle) -> Self {
+    pub fn new(dispatcher: DispatcherHandle<R>) -> Self {
         Self { dispatcher }
     }
 
     /// Create a handle for the given actor ID
-    pub fn for_actor(&self, actor_id: ActorId) -> ActorHandle {
+    pub fn for_actor(&self, actor_id: ActorId) -> ActorHandle<R> {
         ActorHandle::new(ActorRef::new(actor_id), self.dispatcher.clone())
     }
 
@@ -128,7 +135,7 @@ impl ActorHandleBuilder {
         &self,
         namespace: impl Into<String>,
         id: impl Into<String>,
-    ) -> Result<ActorHandle> {
+    ) -> Result<ActorHandle<R>> {
         let actor_id = ActorId::new(namespace, id)?;
         Ok(self.for_actor(actor_id))
     }
@@ -140,6 +147,7 @@ mod tests {
     use crate::dispatcher::{CloneFactory, Dispatcher, DispatcherConfig};
     use async_trait::async_trait;
     use kelpie_core::actor::{Actor, ActorContext};
+    use kelpie_core::Runtime;
     use kelpie_storage::MemoryKV;
     use std::sync::Arc;
 
@@ -174,14 +182,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_actor_handle_basic() {
+        use kelpie_core::TokioRuntime;
+
         let factory = Arc::new(CloneFactory::new(EchoActor));
         let kv = Arc::new(MemoryKV::new());
         let config = DispatcherConfig::default();
+        let runtime = TokioRuntime;
 
-        let mut dispatcher = Dispatcher::new(factory, kv, config);
+        let mut dispatcher = Dispatcher::new(factory, kv, config, runtime.clone());
         let handle = dispatcher.handle();
 
-        let dispatcher_task = tokio::spawn(async move {
+        let dispatcher_task = runtime.spawn(async move {
             dispatcher.run().await;
         });
 
@@ -206,14 +217,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_actor_handle_builder() {
+        use kelpie_core::TokioRuntime;
+
         let factory = Arc::new(CloneFactory::new(EchoActor));
         let kv = Arc::new(MemoryKV::new());
         let config = DispatcherConfig::default();
+        let runtime = TokioRuntime;
 
-        let mut dispatcher = Dispatcher::new(factory, kv, config);
+        let mut dispatcher = Dispatcher::new(factory, kv, config, runtime.clone());
         let dispatcher_handle = dispatcher.handle();
 
-        let dispatcher_task = tokio::spawn(async move {
+        let dispatcher_task = runtime.spawn(async move {
             dispatcher.run().await;
         });
 
@@ -232,14 +246,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_actor_handle_timeout() {
+        use kelpie_core::TokioRuntime;
+
         let factory = Arc::new(CloneFactory::new(EchoActor));
         let kv = Arc::new(MemoryKV::new());
         let config = DispatcherConfig::default();
+        let runtime = TokioRuntime;
 
-        let mut dispatcher = Dispatcher::new(factory, kv, config);
+        let mut dispatcher = Dispatcher::new(factory, kv, config, runtime.clone());
         let dispatcher_handle = dispatcher.handle();
 
-        let dispatcher_task = tokio::spawn(async move {
+        let dispatcher_task = runtime.spawn(async move {
             dispatcher.run().await;
         });
 
@@ -307,14 +324,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_actor_handle_typed_request() {
+        use kelpie_core::TokioRuntime;
+
         let factory = Arc::new(CloneFactory::new(JsonEchoActor));
         let kv = Arc::new(MemoryKV::new());
         let config = DispatcherConfig::default();
+        let runtime = TokioRuntime;
 
-        let mut dispatcher = Dispatcher::new(factory, kv, config);
+        let mut dispatcher = Dispatcher::new(factory, kv, config, runtime.clone());
         let dispatcher_handle = dispatcher.handle();
 
-        let dispatcher_task = tokio::spawn(async move {
+        let dispatcher_task = runtime.spawn(async move {
             dispatcher.run().await;
         });
 

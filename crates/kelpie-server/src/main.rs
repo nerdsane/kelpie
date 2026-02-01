@@ -5,6 +5,7 @@
 mod api;
 
 // Re-export from library
+use kelpie_core::TokioRuntime;
 use kelpie_server::state::AppState;
 use kelpie_server::{llm, tools};
 use tools::{register_heartbeat_tools, register_memory_tools};
@@ -12,7 +13,7 @@ use tools::{register_heartbeat_tools, register_memory_tools};
 use axum::extract::Request;
 use axum::ServiceExt;
 use clap::Parser;
-use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
+use kelpie_server::tools::SandboxProvider;
 use serde_json::Value;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -44,9 +45,94 @@ struct Cli {
     verbose: u8,
 
     /// FoundationDB cluster file path (enables FDB storage)
-    #[cfg(feature = "fdb")]
+    /// Can also be set via KELPIE_FDB_CLUSTER or FDB_CLUSTER_FILE env vars
     #[arg(long)]
     fdb_cluster_file: Option<String>,
+
+    /// Force in-memory mode (no persistence)
+    /// Disables FDB even if cluster file is configured or auto-detected
+    #[arg(long)]
+    memory_only: bool,
+}
+
+/// Storage backend detection result
+enum StorageBackend {
+    /// In-memory storage (no persistence)
+    Memory,
+    /// FoundationDB storage with cluster file path
+    Fdb(String),
+}
+
+/// Standard paths to check for FDB cluster file
+const FDB_CLUSTER_PATHS: &[&str] = &[
+    "/etc/foundationdb/fdb.cluster",
+    "/usr/local/etc/foundationdb/fdb.cluster",
+    "/opt/foundationdb/fdb.cluster",
+    "/var/foundationdb/fdb.cluster",
+];
+
+/// Detect the storage backend to use based on CLI flags, env vars, and auto-detection
+///
+/// Priority order:
+/// 1. --memory-only flag (explicit in-memory mode)
+/// 2. --fdb-cluster-file CLI argument
+/// 3. KELPIE_FDB_CLUSTER env var
+/// 4. FDB_CLUSTER_FILE env var (standard FDB env var)
+/// 5. Auto-detect from standard paths
+/// 6. Fall back to in-memory mode
+fn detect_storage_backend(cli: &Cli) -> StorageBackend {
+    // 1. Check explicit memory-only flag
+    if cli.memory_only {
+        tracing::info!("Storage: --memory-only flag set, using in-memory storage");
+        return StorageBackend::Memory;
+    }
+
+    // 2. Check CLI argument
+    if let Some(ref cluster_file) = cli.fdb_cluster_file {
+        tracing::info!(
+            "Storage: Using FDB cluster file from --fdb-cluster-file: {}",
+            cluster_file
+        );
+        return StorageBackend::Fdb(cluster_file.clone());
+    }
+
+    // 3. Check KELPIE_FDB_CLUSTER env var
+    if let Ok(cluster_file) = std::env::var("KELPIE_FDB_CLUSTER") {
+        if !cluster_file.is_empty() {
+            tracing::info!(
+                "Storage: Using FDB cluster file from KELPIE_FDB_CLUSTER: {}",
+                cluster_file
+            );
+            return StorageBackend::Fdb(cluster_file);
+        }
+    }
+
+    // 4. Check FDB_CLUSTER_FILE env var (standard FDB env var)
+    if let Ok(cluster_file) = std::env::var("FDB_CLUSTER_FILE") {
+        if !cluster_file.is_empty() {
+            tracing::info!(
+                "Storage: Using FDB cluster file from FDB_CLUSTER_FILE: {}",
+                cluster_file
+            );
+            return StorageBackend::Fdb(cluster_file);
+        }
+    }
+
+    // 5. Auto-detect from standard paths
+    for path in FDB_CLUSTER_PATHS {
+        if std::path::Path::new(path).exists() {
+            tracing::info!("Storage: Auto-detected FDB cluster file at: {}", path);
+            return StorageBackend::Fdb((*path).to_string());
+        }
+    }
+
+    // 6. Fall back to in-memory mode
+    tracing::info!("Storage: No FDB cluster file found, using in-memory storage");
+    tracing::info!("  To enable persistence, provide a cluster file via:");
+    tracing::info!("    --fdb-cluster-file <path>");
+    tracing::info!("    KELPIE_FDB_CLUSTER=<path>");
+    tracing::info!("    FDB_CLUSTER_FILE=<path>");
+    StorageBackend::Memory
 }
 
 #[tokio::main]
@@ -84,45 +170,59 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid bind address '{}': {}", cli.bind, e))?;
 
-    // Initialize storage backend (if configured)
-    #[cfg(feature = "fdb")]
-    let storage = if let Some(ref cluster_file) = cli.fdb_cluster_file {
-        use kelpie_server::storage::FdbAgentRegistry;
-        use kelpie_storage::FdbKV;
+    // Create runtime for dispatcher
+    let runtime = TokioRuntime;
 
-        tracing::info!("Connecting to FoundationDB: {}", cluster_file);
-        let fdb_kv = FdbKV::connect(Some(cluster_file))
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to connect to FDB: {}", e))?;
+    // Detect and initialize storage backend
+    let storage_backend = detect_storage_backend(&cli);
+    let storage = match storage_backend {
+        StorageBackend::Fdb(cluster_file) => {
+            use kelpie_server::storage::FdbAgentRegistry;
+            use kelpie_storage::FdbKV;
 
-        let registry = FdbAgentRegistry::new(Arc::new(fdb_kv));
-        tracing::info!("FDB storage initialized");
-        Some(Arc::new(registry) as Arc<dyn kelpie_server::storage::AgentStorage>)
-    } else {
-        tracing::info!("Running in-memory mode (no persistence)");
-        None
-    };
+            tracing::info!("Connecting to FoundationDB: {}", cluster_file);
+            let fdb_kv = FdbKV::connect(Some(&cluster_file))
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to connect to FDB: {}", e))?;
 
-    #[cfg(not(feature = "fdb"))]
-    let storage: Option<Arc<dyn kelpie_server::storage::AgentStorage>> = {
-        tracing::info!("Running in-memory mode (no persistence)");
-        None
+            let registry = FdbAgentRegistry::new(Arc::new(fdb_kv));
+            tracing::info!("FDB storage initialized - data will be persisted");
+            Some(Arc::new(registry) as Arc<dyn kelpie_server::storage::AgentStorage>)
+        }
+        StorageBackend::Memory => {
+            tracing::warn!("Running in-memory mode - data will NOT be persisted!");
+            tracing::warn!("Use --fdb-cluster-file or set KELPIE_FDB_CLUSTER for persistence");
+            None
+        }
     };
 
     // Create application state
     #[cfg(feature = "otel")]
     let state = if let Some(storage) = storage {
-        AppState::with_storage_and_registry(storage, _telemetry_guard.registry().cloned())
+        AppState::with_storage_and_registry(
+            runtime.clone(),
+            storage,
+            _telemetry_guard.registry().cloned(),
+        )
     } else {
-        AppState::with_registry(_telemetry_guard.registry())
+        AppState::with_registry(runtime.clone(), _telemetry_guard.registry())
     };
 
     #[cfg(not(feature = "otel"))]
     let state = if let Some(storage) = storage {
-        AppState::with_storage(storage)
+        AppState::with_storage(runtime.clone(), storage)
     } else {
-        AppState::new()
+        AppState::new(runtime.clone())
     };
+
+    // Initialize sandbox provider (selects backend based on config)
+    SandboxProvider::init()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to initialize sandbox provider: {}", e))?;
+    tracing::info!(
+        backend = %kelpie_server::tools::SandboxBackendKind::detect(),
+        "Sandbox provider initialized"
+    );
 
     // Register builtin tools
     register_builtin_tools(&state).await;
@@ -150,6 +250,31 @@ async fn main() -> anyhow::Result<()> {
     // Load agents from storage (if configured)
     if let Err(err) = state.load_agents_from_storage().await {
         tracing::warn!(error = %err, "Failed to load agents from storage");
+    }
+
+    // Load MCP servers from storage (if configured)
+    if let Err(err) = state.load_mcp_servers_from_storage().await {
+        tracing::warn!(error = %err, "Failed to load MCP servers from storage");
+    }
+
+    // Load agent groups from storage (if configured)
+    if let Err(err) = state.load_agent_groups_from_storage().await {
+        tracing::warn!(error = %err, "Failed to load agent groups from storage");
+    }
+
+    // Load identities from storage (if configured)
+    if let Err(err) = state.load_identities_from_storage().await {
+        tracing::warn!(error = %err, "Failed to load identities from storage");
+    }
+
+    // Load projects from storage (if configured)
+    if let Err(err) = state.load_projects_from_storage().await {
+        tracing::warn!(error = %err, "Failed to load projects from storage");
+    }
+
+    // Load jobs from storage (if configured)
+    if let Err(err) = state.load_jobs_from_storage().await {
+        tracing::warn!(error = %err, "Failed to load jobs from storage");
     }
 
     // Create router
@@ -185,7 +310,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Register builtin tools with the unified registry
-async fn register_builtin_tools(state: &AppState) {
+async fn register_builtin_tools<R: kelpie_core::Runtime + 'static>(state: &AppState<R>) {
     let registry = state.tool_registry();
 
     // Register shell tool
@@ -216,6 +341,9 @@ async fn register_builtin_tools(state: &AppState) {
 }
 
 /// Execute a shell command in a sandboxed environment
+///
+/// Uses SandboxProvider which selects the appropriate backend
+/// (ProcessSandbox or VzSandbox) based on configuration.
 async fn execute_shell_command(input: &Value) -> String {
     let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -223,43 +351,28 @@ async fn execute_shell_command(input: &Value) -> String {
         return "Error: No command provided".to_string();
     }
 
-    // Create and start sandbox
-    let config = SandboxConfig::default();
-    let mut sandbox = ProcessSandbox::new(config);
-
-    if let Err(e) = sandbox.start().await {
-        return format!("Failed to start sandbox: {}", e);
-    }
-
-    // Execute command via sh -c for shell expansion
-    let exec_opts = ExecOptions::new()
-        .with_timeout(std::time::Duration::from_secs(30))
-        .with_max_output(1024 * 1024);
-
-    match sandbox.exec("sh", &["-c", command], exec_opts).await {
-        Ok(output) => {
-            let stdout = output.stdout_string();
-            let stderr = output.stderr_string();
-
-            if output.is_success() {
-                if stdout.is_empty() {
+    // Execute command via sh -c for shell expansion using sandbox provider
+    match kelpie_server::tools::execute_in_sandbox("sh", &["-c", command], 30).await {
+        Ok(result) => {
+            if result.success {
+                if result.stdout.is_empty() {
                     "Command executed successfully (no output)".to_string()
                 } else {
                     // Truncate long output
-                    if stdout.len() > 4000 {
+                    if result.stdout.len() > 4000 {
                         format!(
                             "{}...\n[truncated, {} total bytes]",
-                            &stdout[..4000],
-                            stdout.len()
+                            &result.stdout[..4000],
+                            result.stdout.len()
                         )
                     } else {
-                        stdout
+                        result.stdout
                     }
                 }
             } else {
                 format!(
                     "Command failed with exit code {}:\n{}{}",
-                    output.status.code, stdout, stderr
+                    result.exit_code, result.stdout, result.stderr
                 )
             }
         }

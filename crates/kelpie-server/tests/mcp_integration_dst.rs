@@ -57,7 +57,8 @@ fn create_test_server(name: &str) -> SimMcpServerConfig {
 // Basic Functionality Tests
 // =============================================================================
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_tool_discovery_basic() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -89,7 +90,8 @@ async fn test_dst_mcp_tool_discovery_basic() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_tool_execution_basic() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -116,7 +118,8 @@ async fn test_dst_mcp_tool_execution_basic() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_multiple_servers() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);
@@ -164,7 +167,8 @@ async fn test_dst_mcp_multiple_servers() {
 // Fault Injection Tests
 // =============================================================================
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_server_crash_during_connect() {
     let config = SimConfig::new(12345);
     println!("DST seed: {}", config.seed);
@@ -206,7 +210,8 @@ async fn test_dst_mcp_server_crash_during_connect() {
     assert!(observed > 0, "Expected at least one fault to be observed");
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_tool_fail_during_execution() {
     let config = SimConfig::new(54321);
     println!("DST seed: {}", config.seed);
@@ -253,7 +258,8 @@ async fn test_dst_mcp_tool_fail_during_execution() {
     assert!(observed > 0, "Expected at least one fault to be observed");
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_tool_timeout() {
     let config = SimConfig::new(11111);
     println!("DST seed: {}", config.seed);
@@ -288,7 +294,8 @@ async fn test_dst_mcp_tool_timeout() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_network_partition() {
     let config = SimConfig::new(22222);
     println!("DST seed: {}", config.seed);
@@ -318,7 +325,8 @@ async fn test_dst_mcp_network_partition() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_packet_loss_during_discovery() {
     let config = SimConfig::new(33333);
     println!("DST seed: {}", config.seed);
@@ -347,7 +355,8 @@ async fn test_dst_mcp_packet_loss_during_discovery() {
 // Resilience Tests
 // =============================================================================
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_graceful_degradation() {
     let config = SimConfig::new(44444);
     println!("DST seed: {}", config.seed);
@@ -396,7 +405,8 @@ async fn test_dst_mcp_graceful_degradation() {
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_mixed_tools_with_faults() {
     let config = SimConfig::new(55555);
     println!("DST seed: {}", config.seed);
@@ -461,7 +471,8 @@ async fn test_dst_mcp_mixed_tools_with_faults() {
 // Determinism Tests
 // =============================================================================
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_determinism() {
     let seed = 99999u64;
 
@@ -511,7 +522,8 @@ async fn test_dst_mcp_determinism() {
 // Environment Builder Test
 // =============================================================================
 
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_mcp_environment_builder() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed);

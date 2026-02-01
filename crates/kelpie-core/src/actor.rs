@@ -320,7 +320,7 @@ impl BufferingContextKV {
     }
 }
 
-/// Wrapper to use Arc<BufferingContextKV> as Box<dyn ContextKV>
+/// Wrapper to use `Arc`<`BufferingContextKV`> as `Box`<`dyn ContextKV`>
 ///
 /// This allows sharing a BufferingContextKV between the context and the runtime
 /// so the runtime can drain the buffer after invoke() completes.

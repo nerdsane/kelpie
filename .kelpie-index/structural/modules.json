@@ -1,0 +1,854 @@
+{
+  "version": "1.0.0",
+  "description": "Module hierarchy for all crates",
+  "built_at": "2026-01-21T15:14:22.621550+00:00",
+  "git_sha": "b48291202be6d4cf8e7df20b9a055c2d8a0664b5",
+  "crates": [
+    {
+      "name": "kelpie-server",
+      "root_file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/lib.rs",
+      "modules": [
+        {
+          "path": "kelpie_server::actor::agent_actor",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/actor/agent_actor.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::actor::llm_trait",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/actor/llm_trait.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::actor::state",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/actor/state.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::actor",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/actor/mod.rs",
+          "visibility": "pub",
+          "submodules": [
+            "agent_actor",
+            "llm_trait",
+            "state"
+          ]
+        },
+        {
+          "path": "kelpie_server::api::agent_groups",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/api/agent_groups.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::api::agents",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/api/agents.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::api::archival",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/api/archival.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::api::blocks",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/api/blocks.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::api::groups",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/api/groups.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::api::identities",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/api/identities.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::api::import_export",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/api/import_export.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::api::mcp_servers",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/api/mcp_servers.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::api::messages",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/api/messages.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::api::projects",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/api/projects.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::api::scheduling",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/api/scheduling.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::api::standalone_blocks",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/api/standalone_blocks.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::api::streaming",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/api/streaming.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::api::summarization",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/api/summarization.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::api::teleport",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/api/teleport.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::api::tools",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/api/tools.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::api",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/api/mod.rs",
+          "visibility": "pub",
+          "submodules": [
+            "agent_groups",
+            "agents",
+            "archival",
+            "blocks",
+            "groups",
+            "identities",
+            "import_export",
+            "mcp_servers",
+            "messages",
+            "projects",
+            "scheduling",
+            "standalone_blocks",
+            "streaming",
+            "summarization",
+            "teleport",
+            "tools"
+          ]
+        },
+        {
+          "path": "kelpie_server::http",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/http.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::llm",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/llm.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::memory::umi_backend",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/memory/umi_backend.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::memory",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/memory/mod.rs",
+          "visibility": "pub",
+          "submodules": [
+            "umi_backend"
+          ]
+        },
+        {
+          "path": "kelpie_server::models",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/models.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::service::teleport_service",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/service/teleport_service.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::service",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/service/mod.rs",
+          "visibility": "pub",
+          "submodules": [
+            "teleport_service"
+          ]
+        },
+        {
+          "path": "kelpie_server::state",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/state.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::storage::adapter",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/storage/adapter.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::storage::fdb",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/storage/fdb.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::storage::teleport",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/storage/teleport.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::storage::traits",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/storage/traits.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::storage::types",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/storage/types.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::storage",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/storage/mod.rs",
+          "visibility": "pub",
+          "submodules": [
+            "adapter",
+            "fdb",
+            "teleport",
+            "traits",
+            "types"
+          ]
+        },
+        {
+          "path": "kelpie_server::tools::code_execution",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/tools/code_execution.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::tools::heartbeat",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/tools/heartbeat.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::tools::memory",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/tools/memory.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::tools::messaging",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/tools/messaging.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::tools::registry",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/tools/registry.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::tools::web_search",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/tools/web_search.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_server::tools",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-server/src/tools/mod.rs",
+          "visibility": "pub",
+          "submodules": [
+            "code_execution",
+            "heartbeat",
+            "memory",
+            "messaging",
+            "registry",
+            "web_search"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "kelpie-sandbox",
+      "root_file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-sandbox/src/lib.rs",
+      "modules": [
+        {
+          "path": "kelpie_sandbox::config",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-sandbox/src/config.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_sandbox::error",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-sandbox/src/error.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_sandbox::exec",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-sandbox/src/exec.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_sandbox::io",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-sandbox/src/io.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_sandbox::mock",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-sandbox/src/mock.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_sandbox::pool",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-sandbox/src/pool.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_sandbox::process",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-sandbox/src/process.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_sandbox::snapshot",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-sandbox/src/snapshot.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_sandbox::traits",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-sandbox/src/traits.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_sandbox::firecracker",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-sandbox/src/firecracker.rs",
+          "visibility": "private",
+          "submodules": []
+        }
+      ]
+    },
+    {
+      "name": "kelpie-memory",
+      "root_file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-memory/src/lib.rs",
+      "modules": [
+        {
+          "path": "kelpie_memory::block",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-memory/src/block.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_memory::checkpoint",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-memory/src/checkpoint.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_memory::core",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-memory/src/core.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_memory::embedder",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-memory/src/embedder.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_memory::error",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-memory/src/error.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_memory::search",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-memory/src/search.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_memory::types",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-memory/src/types.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_memory::working",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-memory/src/working.rs",
+          "visibility": "private",
+          "submodules": []
+        }
+      ]
+    },
+    {
+      "name": "kelpie-tools",
+      "root_file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-tools/src/lib.rs",
+      "modules": [
+        {
+          "path": "kelpie_tools::builtin::filesystem",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-tools/src/builtin/filesystem.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_tools::builtin::git",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-tools/src/builtin/git.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_tools::builtin::shell",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-tools/src/builtin/shell.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_tools::builtin",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-tools/src/builtin/mod.rs",
+          "visibility": "private",
+          "submodules": [
+            "filesystem",
+            "git",
+            "shell"
+          ]
+        },
+        {
+          "path": "kelpie_tools::error",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-tools/src/error.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_tools::mcp",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-tools/src/mcp.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_tools::registry",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-tools/src/registry.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_tools::sim",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-tools/src/sim.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_tools::traits",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-tools/src/traits.rs",
+          "visibility": "private",
+          "submodules": []
+        }
+      ]
+    },
+    {
+      "name": "kelpie-core",
+      "root_file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core/src/lib.rs",
+      "modules": [
+        {
+          "path": "kelpie_core::actor",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core/src/actor.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_core::config",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core/src/config.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_core::constants",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core/src/constants.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_core::error",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core/src/error.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_core::io",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core/src/io.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_core::metrics",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core/src/metrics.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_core::runtime",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core/src/runtime.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_core::telemetry",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core/src/telemetry.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_core::teleport",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-core/src/teleport.rs",
+          "visibility": "pub",
+          "submodules": []
+        }
+      ]
+    },
+    {
+      "name": "kelpie-storage",
+      "root_file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-storage/src/lib.rs",
+      "modules": [
+        {
+          "path": "kelpie_storage::fdb",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-storage/src/fdb.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_storage::kv",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-storage/src/kv.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_storage::memory",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-storage/src/memory.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_storage::transaction",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-storage/src/transaction.rs",
+          "visibility": "pub",
+          "submodules": []
+        }
+      ]
+    },
+    {
+      "name": "kelpie-vm",
+      "root_file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-vm/src/lib.rs",
+      "modules": [
+        {
+          "path": "kelpie_vm::backend",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-vm/src/backend.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_vm::config",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-vm/src/config.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_vm::error",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-vm/src/error.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_vm::mock",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-vm/src/mock.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_vm::snapshot",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-vm/src/snapshot.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_vm::traits",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-vm/src/traits.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_vm::virtio_fs",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-vm/src/virtio_fs.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_vm::backends::firecracker",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-vm/src/backends/firecracker.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_vm::backends::vz",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-vm/src/backends/vz.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_vm::backends",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-vm/src/backends/mod.rs",
+          "visibility": "private",
+          "submodules": [
+            "firecracker",
+            "vz"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "kelpie-runtime",
+      "root_file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-runtime/src/lib.rs",
+      "modules": [
+        {
+          "path": "kelpie_runtime::activation",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-runtime/src/activation.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_runtime::dispatcher",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-runtime/src/dispatcher.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_runtime::handle",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-runtime/src/handle.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_runtime::mailbox",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-runtime/src/mailbox.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_runtime::runtime",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-runtime/src/runtime.rs",
+          "visibility": "pub",
+          "submodules": []
+        }
+      ]
+    },
+    {
+      "name": "kelpie-registry",
+      "root_file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-registry/src/lib.rs",
+      "modules": [
+        {
+          "path": "kelpie_registry::error",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-registry/src/error.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_registry::heartbeat",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-registry/src/heartbeat.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_registry::node",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-registry/src/node.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_registry::placement",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-registry/src/placement.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_registry::registry",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-registry/src/registry.rs",
+          "visibility": "private",
+          "submodules": []
+        }
+      ]
+    },
+    {
+      "name": "kelpie-wasm",
+      "root_file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-wasm/src/lib.rs",
+      "modules": []
+    },
+    {
+      "name": "kelpie-agent",
+      "root_file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-agent/src/lib.rs",
+      "modules": []
+    },
+    {
+      "name": "kelpie-dst",
+      "root_file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst/src/lib.rs",
+      "modules": [
+        {
+          "path": "kelpie_dst::agent",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst/src/agent.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_dst::clock",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst/src/clock.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_dst::fault",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst/src/fault.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_dst::llm",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst/src/llm.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_dst::network",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst/src/network.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_dst::rng",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst/src/rng.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_dst::sandbox",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst/src/sandbox.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_dst::sandbox_io",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst/src/sandbox_io.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_dst::simulation",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst/src/simulation.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_dst::storage",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst/src/storage.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_dst::teleport",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst/src/teleport.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_dst::time",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst/src/time.rs",
+          "visibility": "pub",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_dst::vm",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-dst/src/vm.rs",
+          "visibility": "pub",
+          "submodules": []
+        }
+      ]
+    },
+    {
+      "name": "kelpie-cluster",
+      "root_file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-cluster/src/lib.rs",
+      "modules": [
+        {
+          "path": "kelpie_cluster::cluster",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-cluster/src/cluster.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_cluster::config",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-cluster/src/config.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_cluster::error",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-cluster/src/error.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_cluster::migration",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-cluster/src/migration.rs",
+          "visibility": "private",
+          "submodules": []
+        },
+        {
+          "path": "kelpie_cluster::rpc",
+          "file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-cluster/src/rpc.rs",
+          "visibility": "private",
+          "submodules": []
+        }
+      ]
+    },
+    {
+      "name": "kelpie-cli",
+      "root_file": "/Users/seshendranalla/Development/kelpie/crates/kelpie-cli/src/main.rs",
+      "modules": []
+    }
+  ]
+}

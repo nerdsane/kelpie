@@ -2,6 +2,9 @@
 //!
 //! TigerStyle: In-memory storage with fault injection, including transaction support.
 
+// Allow tokio usage in DST framework code (this IS the abstraction layer)
+#![allow(clippy::disallowed_methods)]
+
 use crate::fault::{FaultInjector, FaultType};
 use crate::rng::DeterministicRng;
 use async_trait::async_trait;
@@ -9,16 +12,20 @@ use bytes::Bytes;
 use kelpie_core::{ActorId, Error, Result};
 use kelpie_storage::{ActorKV, ActorTransaction};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
 
 /// Simulated storage for DST
 ///
 /// Provides an in-memory key-value store with configurable fault injection.
+/// Includes OCC (Optimistic Concurrency Control) support for transaction conflict detection.
 #[derive(Debug, Clone)]
 pub struct SimStorage {
     /// Storage data
     data: Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>,
+    /// Per-key version tracking for OCC (Optimistic Concurrency Control)
+    /// Each key has a version that increments on every write, enabling conflict detection
+    versions: Arc<RwLock<HashMap<Vec<u8>, u64>>>,
     /// Fault injector
     fault_injector: Arc<FaultInjector>,
     /// RNG for deterministic behavior
@@ -30,10 +37,11 @@ pub struct SimStorage {
 }
 
 impl SimStorage {
-    /// Create new simulated storage
+    /// Create new simulated storage with OCC support
     pub fn new(rng: DeterministicRng, fault_injector: Arc<FaultInjector>) -> Self {
         Self {
             data: Arc::new(RwLock::new(HashMap::new())),
+            versions: Arc::new(RwLock::new(HashMap::new())),
             fault_injector,
             rng,
             size_limit_bytes: None,
@@ -45,6 +53,14 @@ impl SimStorage {
     pub fn with_size_limit(mut self, limit_bytes: usize) -> Self {
         self.size_limit_bytes = Some(limit_bytes);
         self
+    }
+
+    /// Get the current version of a key (for OCC conflict detection)
+    ///
+    /// Returns the version number, or 0 if the key doesn't exist yet.
+    pub async fn get_version(&self, key: &[u8]) -> u64 {
+        let versions = self.versions.read().await;
+        versions.get(key).copied().unwrap_or(0)
     }
 
     /// Read a value from storage
@@ -63,10 +79,33 @@ impl SimStorage {
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     // Fall through to actual read
                 }
-                // Crash faults are write-specific - ignore during reads
-                // This allows tests to register crash faults globally without breaking reads
-                FaultType::CrashBeforeWrite | FaultType::CrashAfterWrite => {
-                    // Fall through to actual read - these faults don't affect reads
+                // Write-specific faults - ignore during reads
+                // This allows tests to register these faults globally without breaking reads
+                FaultType::CrashBeforeWrite
+                | FaultType::CrashAfterWrite
+                | FaultType::CrashDuringTransaction
+                | FaultType::StorageWriteFail
+                | FaultType::DiskFull
+                // FoundationDB-critical storage faults (Issue #36) - write-only
+                | FaultType::StorageMisdirectedWrite { .. }
+                | FaultType::StoragePartialWrite { .. }
+                | FaultType::StorageFsyncFail
+                | FaultType::StorageUnflushedLoss
+                // Network faults - not applicable to storage reads (from shared injector)
+                | FaultType::NetworkPartition
+                | FaultType::NetworkDelay { .. }
+                | FaultType::NetworkPacketLoss
+                | FaultType::NetworkMessageReorder
+                | FaultType::NetworkPacketCorruption { .. }
+                | FaultType::NetworkJitter { .. }
+                | FaultType::NetworkConnectionExhaustion
+                // Cluster coordination faults - not applicable to storage reads
+                | FaultType::ClusterSplitBrain { .. }
+                | FaultType::ReplicationLag { .. }
+                | FaultType::QuorumLoss { .. }
+                // Resource faults
+                | FaultType::ResourceFdExhaustion => {
+                    // Fall through to actual read - these faults don't affect storage reads
                 }
                 _ => {
                     return self.handle_read_fault(fault, key);
@@ -103,6 +142,64 @@ impl SimStorage {
                         reason: "disk full (injected)".into(),
                     });
                 }
+                // FoundationDB-critical storage semantics faults (Issue #36)
+                FaultType::StorageMisdirectedWrite { target_key } => {
+                    // Write goes to wrong location - data written to target_key instead
+                    tracing::debug!(
+                        intended_key = ?String::from_utf8_lossy(key),
+                        actual_key = ?String::from_utf8_lossy(target_key),
+                        "Misdirected write fault: data written to wrong location"
+                    );
+                    let mut data = self.data.write().await;
+                    data.insert(target_key.clone(), value.to_vec());
+                    // Return success - the caller thinks write succeeded
+                    // but data went to wrong place (silent corruption)
+                    return Ok(());
+                }
+                FaultType::StoragePartialWrite { bytes_written } => {
+                    // Only partial data written
+                    let actual_bytes = (*bytes_written).min(value.len());
+                    if actual_bytes == 0 {
+                        // No bytes written at all
+                        return Err(Error::StorageWriteFailed {
+                            key: String::from_utf8_lossy(key).to_string(),
+                            reason: "partial write failed - 0 bytes written (injected)".into(),
+                        });
+                    }
+                    // Write truncated data
+                    let mut data = self.data.write().await;
+                    data.insert(key.to_vec(), value[..actual_bytes].to_vec());
+                    tracing::debug!(
+                        key = ?String::from_utf8_lossy(key),
+                        requested = value.len(),
+                        written = actual_bytes,
+                        "Partial write fault: only some bytes written"
+                    );
+                    // Return success - caller thinks full write happened
+                    return Ok(());
+                }
+                FaultType::StorageFsyncFail => {
+                    // Write to buffer succeeds but fsync fails
+                    // Data is in page cache but not guaranteed durable
+                    let mut data = self.data.write().await;
+                    data.insert(key.to_vec(), value.to_vec());
+                    // Return error to indicate durability not guaranteed
+                    return Err(Error::StorageWriteFailed {
+                        key: String::from_utf8_lossy(key).to_string(),
+                        reason: "fsync failed - data may not be durable (injected)".into(),
+                    });
+                }
+                FaultType::StorageUnflushedLoss => {
+                    // Simulate crash before OS buffers flushed
+                    // The write appears to succeed but data is lost on "crash"
+                    // We don't actually write the data - simulating loss
+                    tracing::debug!(
+                        key = ?String::from_utf8_lossy(key),
+                        "Unflushed loss fault: write appeared successful but data lost"
+                    );
+                    // Return success but don't persist (simulates crash losing buffered data)
+                    return Ok(());
+                }
                 // CrashAfterWrite and other faults are handled after the write
                 _ => {}
             }
@@ -123,6 +220,7 @@ impl SimStorage {
         }
 
         let mut data = self.data.write().await;
+        let mut versions = self.versions.write().await;
 
         // Update size tracking
         let old_size = data.get(key).map(|v| v.len()).unwrap_or(0);
@@ -130,6 +228,10 @@ impl SimStorage {
         let size_delta = new_size as isize - old_size as isize;
 
         data.insert(key.to_vec(), value.to_vec());
+
+        // Increment version for OCC conflict detection
+        let new_version = versions.get(key).copied().unwrap_or(0) + 1;
+        versions.insert(key.to_vec(), new_version);
 
         if size_delta > 0 {
             self.current_size_bytes
@@ -160,11 +262,16 @@ impl SimStorage {
         }
 
         let mut data = self.data.write().await;
+        let mut versions = self.versions.write().await;
 
         if let Some(old_value) = data.remove(key) {
             self.current_size_bytes
                 .fetch_sub(old_value.len(), std::sync::atomic::Ordering::SeqCst);
         }
+
+        // Increment version on delete (deletion is a write operation)
+        let new_version = versions.get(key).copied().unwrap_or(0) + 1;
+        versions.insert(key.to_vec(), new_version);
 
         Ok(())
     }
@@ -194,7 +301,9 @@ impl SimStorage {
     /// Clear all data
     pub async fn clear(&self) {
         let mut data = self.data.write().await;
+        let mut versions = self.versions.write().await;
         data.clear();
+        versions.clear();
         self.current_size_bytes
             .store(0, std::sync::atomic::Ordering::SeqCst);
     }
@@ -354,6 +463,7 @@ impl ActorKV for SimStorage {
         Ok(Box::new(SimTransaction::new(
             actor_id.clone(),
             self.data.clone(),
+            self.versions.clone(),
             self.fault_injector.clone(),
         )))
     }
@@ -364,16 +474,27 @@ impl ActorKV for SimStorage {
 /// Buffers writes until commit. Supports CrashDuringTransaction fault injection
 /// to test application behavior when transactions fail mid-commit.
 ///
+/// Implements OCC (Optimistic Concurrency Control):
+/// - Tracks read-set with versions at read time
+/// - On commit: validates read-set (checks if any read key changed)
+/// - If conflict detected: aborts with TransactionConflict error
+/// - If no conflict: applies writes atomically and increments versions
+///
 /// TigerStyle: Explicit state, fault injection at commit boundary.
 pub struct SimTransaction {
     /// Actor this transaction operates on
     actor_id: ActorId,
     /// Reference to the underlying storage data
     data: Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>,
+    /// Reference to version tracking for OCC
+    versions: Arc<RwLock<HashMap<Vec<u8>, u64>>>,
     /// Fault injector for crash simulation
     fault_injector: Arc<FaultInjector>,
     /// Buffered writes: scoped_key -> Some(value) for set, None for delete
     write_buffer: HashMap<Vec<u8>, Option<Vec<u8>>>,
+    /// Read-set versions: scoped_key -> version at read time (for OCC conflict detection)
+    /// Uses Mutex for interior mutability since reads need to track versions
+    read_versions: Arc<Mutex<HashMap<Vec<u8>, u64>>>,
     /// Whether this transaction has been finalized (committed or aborted)
     finalized: bool,
 }
@@ -382,13 +503,16 @@ impl SimTransaction {
     fn new(
         actor_id: ActorId,
         data: Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>,
+        versions: Arc<RwLock<HashMap<Vec<u8>, u64>>>,
         fault_injector: Arc<FaultInjector>,
     ) -> Self {
         Self {
             actor_id,
             data,
+            versions,
             fault_injector,
             write_buffer: HashMap::new(),
+            read_versions: Arc::new(Mutex::new(HashMap::new())),
             finalized: false,
         }
     }
@@ -427,6 +551,14 @@ impl ActorTransaction for SimTransaction {
                 });
             }
         }
+
+        // Track version at read time (for OCC conflict detection)
+        let versions = self.versions.read().await;
+        let version = versions.get(&scoped_key).copied().unwrap_or(0);
+        self.read_versions
+            .lock()
+            .unwrap()
+            .insert(scoped_key.clone(), version);
 
         // Fall back to storage
         let data = self.data.read().await;
@@ -493,15 +625,44 @@ impl ActorTransaction for SimTransaction {
             }
         }
 
-        // Apply all buffered writes atomically
+        // OCC Conflict Detection: Validate read-set
+        // Check if any key we read has been modified since we read it
+        let read_versions_map = self.read_versions.lock().unwrap().clone();
+        let versions = self.versions.read().await;
+        for (key, read_version) in &read_versions_map {
+            let current_version = versions.get(key).copied().unwrap_or(0);
+            if current_version != *read_version {
+                // Conflict detected: key was modified by another transaction
+                return Err(Error::TransactionConflict {
+                    reason: format!(
+                        "key {:?} version changed from {} to {}",
+                        String::from_utf8_lossy(key),
+                        read_version,
+                        current_version
+                    ),
+                });
+            }
+        }
+        drop(versions); // Release read lock before acquiring write lock
+
+        // No conflict detected - proceed with atomic commit
         let mut data = self.data.write().await;
+        let mut versions = self.versions.write().await;
+
+        // Apply all buffered writes atomically and increment versions
         for (key, value) in self.write_buffer.drain() {
             match value {
                 Some(v) => {
-                    data.insert(key, v);
+                    data.insert(key.clone(), v);
+                    // Increment version on write
+                    let new_version = versions.get(&key).copied().unwrap_or(0) + 1;
+                    versions.insert(key, new_version);
                 }
                 None => {
                     data.remove(&key);
+                    // Increment version on delete
+                    let new_version = versions.get(&key).copied().unwrap_or(0) + 1;
+                    versions.insert(key, new_version);
                 }
             }
         }
@@ -813,6 +974,209 @@ mod tests {
             results.push(txn.commit().await.is_ok());
         }
 
+        results
+    }
+
+    // ============================================================================
+    // FoundationDB-Critical Storage Fault Tests (Issue #36)
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_storage_misdirected_write() {
+        let rng = DeterministicRng::new(42);
+        let target_key = b"__wrong_location__".to_vec();
+        let fault_injector = Arc::new(
+            FaultInjectorBuilder::new(rng.fork())
+                .with_fault(FaultConfig::new(
+                    FaultType::StorageMisdirectedWrite {
+                        target_key: target_key.clone(),
+                    },
+                    1.0,
+                ))
+                .build(),
+        );
+        let storage = SimStorage::new(rng, fault_injector);
+
+        // Write to key1 - but due to misdirected fault, data goes to target_key
+        let result = storage.write(b"key1", b"value1").await;
+        assert!(result.is_ok(), "Misdirected write should appear successful");
+
+        // Key1 should NOT have the data (it went to wrong location)
+        let value = storage.read(b"key1").await.unwrap();
+        assert!(
+            value.is_none(),
+            "Original key should be empty due to misdirected write"
+        );
+
+        // Data should be at the misdirected target location
+        let misdirected = storage.read(&target_key).await.unwrap();
+        assert_eq!(
+            misdirected,
+            Some(Bytes::from("value1")),
+            "Data should be at misdirected target key"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_storage_partial_write_truncated() {
+        let rng = DeterministicRng::new(42);
+        let fault_injector = Arc::new(
+            FaultInjectorBuilder::new(rng.fork())
+                .with_fault(FaultConfig::new(
+                    FaultType::StoragePartialWrite { bytes_written: 3 },
+                    1.0,
+                ))
+                .build(),
+        );
+        let storage = SimStorage::new(rng, fault_injector);
+
+        // Write "hello_world" but only 3 bytes get written
+        let result = storage.write(b"key1", b"hello_world").await;
+        assert!(result.is_ok(), "Partial write should appear successful");
+
+        // Should only have first 3 bytes
+        let value = storage.read(b"key1").await.unwrap();
+        assert_eq!(
+            value,
+            Some(Bytes::from("hel")),
+            "Only partial data should be written"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_storage_partial_write_zero_bytes() {
+        let rng = DeterministicRng::new(42);
+        let fault_injector = Arc::new(
+            FaultInjectorBuilder::new(rng.fork())
+                .with_fault(FaultConfig::new(
+                    FaultType::StoragePartialWrite { bytes_written: 0 },
+                    1.0,
+                ))
+                .build(),
+        );
+        let storage = SimStorage::new(rng, fault_injector);
+
+        // Write should fail when 0 bytes written
+        let result = storage.write(b"key1", b"hello").await;
+        assert!(result.is_err(), "Zero byte partial write should fail");
+
+        // Key should not exist
+        let value = storage.read(b"key1").await.unwrap();
+        assert!(value.is_none(), "No data should be written");
+    }
+
+    #[tokio::test]
+    async fn test_storage_fsync_fail() {
+        let rng = DeterministicRng::new(42);
+        let fault_injector = Arc::new(
+            FaultInjectorBuilder::new(rng.fork())
+                .with_fault(FaultConfig::new(FaultType::StorageFsyncFail, 1.0))
+                .build(),
+        );
+        let storage = SimStorage::new(rng, fault_injector);
+
+        // Write should fail due to fsync failure
+        let result = storage.write(b"key1", b"value1").await;
+        assert!(result.is_err(), "Fsync failure should be reported");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("fsync failed - data may not be durable"),
+            "Error should indicate fsync failure"
+        );
+
+        // Data IS written (to buffer) even though fsync failed
+        let value = storage.read(b"key1").await.unwrap();
+        assert_eq!(
+            value,
+            Some(Bytes::from("value1")),
+            "Data should be in buffer despite fsync failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_storage_unflushed_loss() {
+        let rng = DeterministicRng::new(42);
+        let fault_injector = Arc::new(
+            FaultInjectorBuilder::new(rng.fork())
+                .with_fault(FaultConfig::new(FaultType::StorageUnflushedLoss, 1.0))
+                .build(),
+        );
+        let storage = SimStorage::new(rng, fault_injector);
+
+        // Write appears successful but data is lost
+        let result = storage.write(b"key1", b"value1").await;
+        assert!(
+            result.is_ok(),
+            "Unflushed loss appears successful to caller"
+        );
+
+        // But data is NOT actually persisted (simulates crash losing buffered data)
+        let value = storage.read(b"key1").await.unwrap();
+        assert!(value.is_none(), "Data should be lost due to unflushed loss");
+    }
+
+    #[tokio::test]
+    async fn test_storage_semantics_faults_determinism() {
+        // Same seed should produce same misdirected write behavior
+        for seed in [42u64, 123, 456] {
+            let rng1 = DeterministicRng::new(seed);
+            let rng2 = DeterministicRng::new(seed);
+            let target_key = b"__misdirected__".to_vec();
+
+            let fi1 = Arc::new(
+                FaultInjectorBuilder::new(rng1.fork())
+                    .with_fault(FaultConfig::new(
+                        FaultType::StorageMisdirectedWrite {
+                            target_key: target_key.clone(),
+                        },
+                        0.5, // 50% chance
+                    ))
+                    .build(),
+            );
+            let fi2 = Arc::new(
+                FaultInjectorBuilder::new(rng2.fork())
+                    .with_fault(FaultConfig::new(
+                        FaultType::StorageMisdirectedWrite {
+                            target_key: target_key.clone(),
+                        },
+                        0.5,
+                    ))
+                    .build(),
+            );
+
+            let storage1 = SimStorage::new(rng1, fi1);
+            let storage2 = SimStorage::new(rng2, fi2);
+
+            // Run same sequence of writes
+            let results1 = run_storage_sequence(&storage1).await;
+            let results2 = run_storage_sequence(&storage2).await;
+
+            assert_eq!(
+                results1, results2,
+                "seed {} should produce identical misdirected write patterns",
+                seed
+            );
+        }
+    }
+
+    async fn run_storage_sequence(storage: &SimStorage) -> Vec<bool> {
+        let mut results = Vec::new();
+        for i in 0..10 {
+            storage
+                .write(format!("key{}", i).as_bytes(), b"value")
+                .await
+                .ok();
+            // Check if data ended up at intended location
+            results.push(
+                storage
+                    .read(format!("key{}", i).as_bytes())
+                    .await
+                    .unwrap()
+                    .is_some(),
+            );
+        }
         results
     }
 }

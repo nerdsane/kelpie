@@ -1,15 +1,20 @@
 //! Code Execution Tool for Letta Compatibility
 //!
-//! TigerStyle: ProcessSandbox integration with multi-language support.
+//! TigerStyle: Sandbox-agnostic code execution with multi-language support.
 //!
-//! Implements Letta's run_code prebuilt tool using ProcessSandbox.
+//! Implements Letta's run_code prebuilt tool using SandboxProvider.
 //! Supports Python, JavaScript, TypeScript, R, and Java execution.
+//!
+//! The sandbox backend is selected by SandboxProvider based on:
+//! - Feature flags (libkrun feature enables libkrun VM support)
+//! - Runtime environment (macOS ARM64 or Linux for libkrun)
+//! - Configuration (KELPIE_SANDBOX_BACKEND env var)
 
+use crate::tools::sandbox_provider;
 use crate::tools::{BuiltinToolHandler, UnifiedToolRegistry};
-use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
+use kelpie_core::io::{TimeProvider, WallClockTime};
 use serde_json::{json, Value};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 // =============================================================================
 // TigerStyle Constants
@@ -18,14 +23,11 @@ use std::time::{Duration, Instant};
 /// Maximum code size in bytes (1 MiB)
 const CODE_SIZE_BYTES_MAX: usize = 1024 * 1024;
 
-/// Maximum output size in bytes (1 MiB)
-const OUTPUT_SIZE_BYTES_MAX: u64 = 1024 * 1024;
-
 /// Default execution timeout in seconds
-const EXECUTION_TIMEOUT_SECONDS_DEFAULT: u64 = 30;
+const EXECUTION_TIMEOUT_SECONDS_DEFAULT: u64 = sandbox_provider::EXEC_TIMEOUT_SECONDS_DEFAULT;
 
 /// Maximum execution timeout in seconds
-const EXECUTION_TIMEOUT_SECONDS_MAX: u64 = 300;
+const EXECUTION_TIMEOUT_SECONDS_MAX: u64 = sandbox_provider::EXEC_TIMEOUT_SECONDS_MAX;
 
 /// Minimum execution timeout in seconds
 const EXECUTION_TIMEOUT_SECONDS_MIN: u64 = 1;
@@ -188,46 +190,34 @@ struct ExecutionResult {
     success: bool,
 }
 
-/// Execute command in ProcessSandbox
+/// Execute command in sandbox using SandboxProvider
+///
+/// Uses the global SandboxProvider which selects the appropriate backend
+/// (ProcessSandbox or LibkrunSandbox) based on configuration.
 async fn execute_in_sandbox(
     command: &str,
     args: &[String],
     timeout_seconds: u64,
 ) -> Result<ExecutionResult, String> {
-    // Create and start sandbox
-    let config = SandboxConfig::default();
-    let mut sandbox = ProcessSandbox::new(config);
-
-    if let Err(e) = sandbox.start().await {
-        return Err(format!("Failed to start sandbox: {}", e));
-    }
-
-    // Configure execution options
-    let exec_opts = ExecOptions::new()
-        .with_timeout(Duration::from_secs(timeout_seconds))
-        .with_max_output(OUTPUT_SIZE_BYTES_MAX);
-
     // Convert Vec<String> to Vec<&str> for exec()
     let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
-    // Execute command and measure time
-    let start_time = Instant::now();
-    let output = sandbox
-        .exec(command, &args_refs, exec_opts)
-        .await
-        .map_err(|e| format!("Sandbox execution failed: {}", e))?;
-    let execution_time_ms = start_time.elapsed().as_millis() as u64;
+    // Measure execution time
+    let time = WallClockTime::new();
+    let start_ms = time.monotonic_ms();
 
-    // Build result
-    let result = ExecutionResult {
-        stdout: output.stdout_string(),
-        stderr: output.stderr_string(),
-        exit_code: output.status.code,
+    // Execute using the global sandbox provider
+    let result = sandbox_provider::execute_in_sandbox(command, &args_refs, timeout_seconds).await?;
+
+    let execution_time_ms = time.monotonic_ms().saturating_sub(start_ms);
+
+    Ok(ExecutionResult {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exit_code: result.exit_code,
         execution_time_ms,
-        success: output.is_success(),
-    };
-
-    Ok(result)
+        success: result.success,
+    })
 }
 
 /// Format execution result for display
@@ -258,7 +248,6 @@ mod tests {
         assert!(EXECUTION_TIMEOUT_SECONDS_DEFAULT >= EXECUTION_TIMEOUT_SECONDS_MIN);
         assert!(EXECUTION_TIMEOUT_SECONDS_DEFAULT <= EXECUTION_TIMEOUT_SECONDS_MAX);
         assert!(CODE_SIZE_BYTES_MAX > 0);
-        assert!(OUTPUT_SIZE_BYTES_MAX > 0);
     }
 
     #[tokio::test]

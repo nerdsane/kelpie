@@ -8,6 +8,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use kelpie_core::Runtime;
 use kelpie_server::models::{AgentState, CreateAgentRequest, ListResponse, UpdateAgentRequest};
 use kelpie_server::state::AppState;
 use serde::{Deserialize, Serialize};
@@ -26,6 +27,8 @@ pub struct ListAgentsQuery {
     pub after: Option<String>,
     /// Filter by project ID
     pub project_id: Option<String>,
+    /// Filter by agent name (exact match)
+    pub name: Option<String>,
 }
 
 fn default_limit() -> usize {
@@ -79,7 +82,7 @@ struct BatchDeleteAgentResult {
 }
 
 /// Create agent routes
-pub fn router() -> Router<AppState> {
+pub fn router<R: Runtime + 'static>() -> Router<AppState<R>> {
     Router::new()
         .route("/", get(list_agents).post(create_agent))
         .route(
@@ -152,8 +155,8 @@ pub fn router() -> Router<AppState> {
 ///
 /// POST /v1/agents
 #[instrument(skip(state, request), fields(agent_name = %request.name), level = "info")]
-async fn create_agent(
-    State(state): State<AppState>,
+async fn create_agent<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Json(request): Json<CreateAgentRequest>,
 ) -> Result<Json<AgentState>, ApiError> {
     // Validate request
@@ -173,6 +176,14 @@ async fn create_agent(
     // Create agent via dual-mode method
     let mut created = state.create_agent_async(request).await?;
 
+    // TigerStyle: Persist agent metadata to storage BEFORE returning
+    // This ensures the agent is visible to list operations immediately after creation
+    // Fix for race condition: persist must complete before returning
+    state
+        .persist_agent(&created)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to persist agent metadata: {}", e)))?;
+
     // Look up and attach standalone blocks by ID (letta-code compatibility)
     // Note: This is a temporary workaround until standalone blocks are integrated into the actor model
     for block_id in block_ids {
@@ -183,9 +194,33 @@ async fn create_agent(
         }
     }
 
-    // Persist to durable storage (if configured)
-    if let Err(e) = state.persist_agent(&created).await {
-        tracing::warn!(agent_id = %created.id, error = %e, "failed to persist agent to storage");
+    // TigerStyle: Validate tool references (MCP tools already registered at server creation)
+    if !created.tool_ids.is_empty() {
+        tracing::debug!(
+            agent_id = %created.id,
+            tool_ids = ?created.tool_ids,
+            "Agent created with tool references"
+        );
+
+        // Validation: Check if MCP tools exist in registry
+        let registry = state.tool_registry();
+        for tool_id in &created.tool_ids {
+            if tool_id.starts_with("mcp_") {
+                if registry.has_tool(tool_id).await {
+                    tracing::debug!(
+                        agent_id = %created.id,
+                        tool_id = %tool_id,
+                        "MCP tool reference validated"
+                    );
+                } else {
+                    tracing::warn!(
+                        agent_id = %created.id,
+                        tool_id = %tool_id,
+                        "Referenced MCP tool not found in registry (server may need to be created first)"
+                    );
+                }
+            }
+        }
     }
 
     tracing::info!(agent_id = %created.id, name = %created.name, block_count = created.blocks.len(), "created agent");
@@ -205,8 +240,8 @@ pub struct GetAgentQuery {
 /// GET /v1/agents/{agent_id}
 /// GET /v1/agents/{agent_id}?include=agent.tools
 #[instrument(skip(state, query), fields(agent_id = %agent_id), level = "info")]
-async fn get_agent(
-    State(state): State<AppState>,
+async fn get_agent<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
     Query(query): Query<GetAgentQuery>,
 ) -> Result<Json<AgentStateWithTools>, ApiError> {
@@ -247,8 +282,8 @@ pub struct AgentStateWithTools {
 ///
 /// GET /v1/agents/{agent_id}/tools
 #[instrument(skip(state), fields(agent_id = %agent_id), level = "info")]
-async fn list_agent_tools(
-    State(state): State<AppState>,
+async fn list_agent_tools<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<Vec<super::tools::ToolResponse>>, ApiError> {
     let agent = state
@@ -272,8 +307,8 @@ async fn list_agent_tools(
 ///
 /// POST /v1/agents/{agent_id}/tools/{tool_id}
 #[instrument(skip(state), fields(agent_id = %agent_id, tool_id = %tool_id), level = "info")]
-async fn attach_tool(
-    State(state): State<AppState>,
+async fn attach_tool<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path((agent_id, tool_id)): Path<(String, String)>,
 ) -> Result<Json<super::tools::ToolResponse>, ApiError> {
     // Get the tool (by ID or name)
@@ -309,8 +344,8 @@ async fn attach_tool(
 ///
 /// DELETE /v1/agents/{agent_id}/tools/{tool_id}
 #[instrument(skip(state), fields(agent_id = %agent_id, tool_id = %tool_id), level = "info")]
-async fn detach_tool(
-    State(state): State<AppState>,
+async fn detach_tool<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path((agent_id, tool_id)): Path<(String, String)>,
 ) -> Result<(), ApiError> {
     // Verify agent exists
@@ -341,8 +376,8 @@ async fn detach_tool(
 ///
 /// Supports both Kelpie's `cursor` and Letta SDK's `after` parameters for pagination.
 #[instrument(skip(state, query), fields(limit = query.limit, cursor = ?query.cursor, after = ?query.after), level = "info")]
-async fn list_agents(
-    State(state): State<AppState>,
+async fn list_agents<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Query(query): Query<ListAgentsQuery>,
 ) -> Result<Json<ListResponse<AgentState>>, ApiError> {
     let limit = query.limit.min(LIST_LIMIT_MAX);
@@ -351,8 +386,18 @@ async fn list_agents(
     // The `after` parameter is what the Letta SDK uses for pagination
     let pagination_cursor = query.cursor.as_deref().or(query.after.as_deref());
 
+    // TigerStyle: Apply name filter in storage query before pagination
+    // This ensures correct results when paginating filtered lists
+    let name_filter = query.name.as_deref();
+
     let (items, cursor, total) = if let Some(project_id) = query.project_id.as_deref() {
         let mut agents = state.list_agents_by_project(project_id)?;
+
+        // Apply name filter BEFORE pagination
+        if let Some(name) = name_filter {
+            agents.retain(|agent| agent.name == name);
+        }
+
         agents.sort_by(|a, b| a.created_at.cmp(&b.created_at));
         let total = agents.len();
 
@@ -378,7 +423,9 @@ async fn list_agents(
 
         (items, next_cursor, total)
     } else {
-        let (items, cursor) = state.list_agents_async(limit, pagination_cursor).await?;
+        let (items, cursor) = state
+            .list_agents_async(limit, pagination_cursor, name_filter)
+            .await?;
         let total = state.agent_count()?;
         (items, cursor, total)
     };
@@ -392,8 +439,8 @@ async fn list_agents(
 
 /// Batch create agents
 #[instrument(skip(state, request), level = "info")]
-async fn create_agents_batch(
-    State(state): State<AppState>,
+async fn create_agents_batch<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Json(request): Json<BatchCreateAgentsRequest>,
 ) -> Result<Json<BatchAgentsResponse>, ApiError> {
     if request.agents.is_empty() {
@@ -423,8 +470,8 @@ async fn create_agents_batch(
 
 /// Batch delete agents
 #[instrument(skip(state, request), level = "info")]
-async fn delete_agents_batch(
-    State(state): State<AppState>,
+async fn delete_agents_batch<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Json(request): Json<BatchDeleteAgentsRequest>,
 ) -> Result<Json<BatchDeleteAgentsResponse>, ApiError> {
     if request.agent_ids.is_empty() {
@@ -454,8 +501,8 @@ async fn delete_agents_batch(
 ///
 /// PATCH /v1/agents/{agent_id}
 #[instrument(skip(state, request), fields(agent_id = %agent_id), level = "info")]
-async fn update_agent(
-    State(state): State<AppState>,
+async fn update_agent<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
     Json(request): Json<UpdateAgentRequest>,
 ) -> Result<Json<AgentState>, ApiError> {
@@ -484,8 +531,8 @@ async fn update_agent(
 ///
 /// DELETE /v1/agents/{agent_id}
 #[instrument(skip(state), fields(agent_id = %agent_id), level = "info")]
-async fn delete_agent(
-    State(state): State<AppState>,
+async fn delete_agent<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
 ) -> Result<(), ApiError> {
     state.delete_agent_async(&agent_id).await?;
@@ -500,6 +547,7 @@ mod tests {
     use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use kelpie_core::Runtime;
     use kelpie_dst::{DeterministicRng, FaultInjector, SimStorage};
     use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
     use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -557,19 +605,22 @@ mod tests {
         let storage = SimStorage::new(rng.fork(), faults);
         let kv = Arc::new(storage);
 
-        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState>::new(
+        let runtime = kelpie_core::TokioRuntime;
+
+        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState, _>::new(
             factory,
             kv,
             DispatcherConfig::default(),
+            runtime.clone(),
         );
         let handle = dispatcher.handle();
 
-        tokio::spawn(async move {
+        drop(runtime.spawn(async move {
             dispatcher.run().await;
-        });
+        }));
 
         let service = service::AgentService::new(handle.clone());
-        let state = AppState::with_agent_service(service, handle);
+        let state = AppState::with_agent_service(runtime, service, handle);
 
         api::router(state)
     }
@@ -671,5 +722,252 @@ mod tests {
             .unwrap();
         let health: kelpie_server::models::HealthResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(health.status, "ok");
+    }
+
+    // ============================================================================
+    // Phase 5: Persistence Verification Tests
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_agent_roundtrip_all_fields() {
+        let app = test_app().await;
+
+        // Create agent with ALL fields populated
+        let create_body = serde_json::json!({
+            "name": "roundtrip-agent",
+            "description": "A test agent for round-trip verification",
+            "system": "You are a helpful assistant",
+            "agent_type": "letta_v1_agent",
+            "memory_blocks": [
+                {"label": "persona", "value": "I am a test persona"},
+                {"label": "human", "value": "The user is testing"}
+            ],
+            "tool_ids": ["tool-1", "tool-2"],
+            "tags": ["test", "roundtrip", "verification"],
+            "metadata": {"key1": "value1", "key2": "value2"}
+        });
+
+        // Create the agent
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/agents")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&create_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: AgentState = serde_json::from_slice(&body).unwrap();
+
+        // Verify all fields in create response
+        assert_eq!(created.name, "roundtrip-agent");
+        assert_eq!(
+            created.description.as_deref(),
+            Some("A test agent for round-trip verification")
+        );
+        assert_eq!(
+            created.system.as_deref(),
+            Some("You are a helpful assistant")
+        );
+        assert_eq!(created.blocks.len(), 2);
+        assert_eq!(created.tool_ids, vec!["tool-1", "tool-2"]);
+        assert_eq!(created.tags, vec!["test", "roundtrip", "verification"]);
+        assert_eq!(
+            created.metadata.get("key1").and_then(|v| v.as_str()),
+            Some("value1")
+        );
+
+        // Read the agent back
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/agents/{}", created.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let fetched: AgentState = serde_json::from_slice(&body).unwrap();
+
+        // Verify ALL fields match after round-trip
+        assert_eq!(fetched.id, created.id);
+        assert_eq!(fetched.name, created.name);
+        assert_eq!(fetched.description, created.description);
+        assert_eq!(fetched.system, created.system);
+        assert_eq!(fetched.blocks.len(), created.blocks.len());
+        for (fetched_block, created_block) in fetched.blocks.iter().zip(created.blocks.iter()) {
+            assert_eq!(fetched_block.label, created_block.label);
+            assert_eq!(fetched_block.value, created_block.value);
+        }
+        assert_eq!(fetched.tool_ids, created.tool_ids);
+        assert_eq!(fetched.tags, created.tags);
+        assert_eq!(fetched.metadata, created.metadata);
+    }
+
+    #[tokio::test]
+    async fn test_agent_update_persists() {
+        let app = test_app().await;
+
+        // Create an agent
+        let create_body = serde_json::json!({
+            "name": "update-test-agent",
+            "description": "Original description",
+            "tags": ["original"]
+        });
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/agents")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&create_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: AgentState = serde_json::from_slice(&body).unwrap();
+        let agent_id = created.id.clone();
+
+        // Update the agent (uses PATCH, not PUT)
+        let update_body = serde_json::json!({
+            "name": "updated-agent-name",
+            "description": "Updated description",
+            "tags": ["updated", "modified"]
+        });
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/v1/agents/{}", agent_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&update_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Read the agent back to verify update persisted
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/agents/{}", agent_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let fetched: AgentState = serde_json::from_slice(&body).unwrap();
+
+        // Verify updates persisted
+        assert_eq!(fetched.name, "updated-agent-name");
+        assert_eq!(fetched.description.as_deref(), Some("Updated description"));
+        assert_eq!(fetched.tags, vec!["updated", "modified"]);
+    }
+
+    #[tokio::test]
+    async fn test_agent_delete_removes_from_storage() {
+        let app = test_app().await;
+
+        // Create an agent
+        let create_body = serde_json::json!({
+            "name": "delete-test-agent"
+        });
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/agents")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&create_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: AgentState = serde_json::from_slice(&body).unwrap();
+        let agent_id = created.id.clone();
+
+        // Verify agent exists
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/agents/{}", agent_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Delete the agent
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/v1/agents/{}", agent_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify agent is gone
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/agents/{}", agent_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

@@ -15,13 +15,14 @@ use axum::{
     routing::{delete, get},
     Json, Router,
 };
+use kelpie_core::Runtime;
 use kelpie_server::state::AppState;
 use serde::Serialize;
 
 use super::ApiError;
 
 /// Create the teleport router
-pub fn router() -> Router<AppState> {
+pub fn router<R: Runtime + 'static>() -> Router<AppState<R>> {
     Router::new()
         // Package management
         .route("/packages", get(list_packages))
@@ -89,7 +90,9 @@ async fn teleport_info() -> Json<TeleportInfoResponse> {
 /// List all teleport packages
 ///
 /// GET /v1/teleport/packages
-async fn list_packages(State(_state): State<AppState>) -> Json<ListPackagesResponse> {
+async fn list_packages<R: Runtime + 'static>(
+    State(_state): State<AppState<R>>,
+) -> Json<ListPackagesResponse> {
     // TODO: When teleport storage is added to AppState, query actual packages
     // For now, return empty list
     Json(ListPackagesResponse {
@@ -101,8 +104,8 @@ async fn list_packages(State(_state): State<AppState>) -> Json<ListPackagesRespo
 /// Get package details
 ///
 /// GET /v1/teleport/packages/:package_id
-async fn get_package(
-    State(_state): State<AppState>,
+async fn get_package<R: Runtime + 'static>(
+    State(_state): State<AppState<R>>,
     Path(package_id): Path<String>,
 ) -> Result<Json<PackageResponse>, ApiError> {
     // TODO: When teleport storage is added to AppState, query actual package
@@ -113,8 +116,8 @@ async fn get_package(
 /// Delete a teleport package
 ///
 /// DELETE /v1/teleport/packages/:package_id
-async fn delete_package(
-    State(_state): State<AppState>,
+async fn delete_package<R: Runtime + 'static>(
+    State(_state): State<AppState<R>>,
     Path(package_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // TODO: When teleport storage is added to AppState, delete actual package
@@ -130,7 +133,7 @@ mod tests {
     use tower::ServiceExt;
 
     fn test_app() -> Router {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         Router::new()
             .nest("/v1/teleport", router())
             .with_state(state)

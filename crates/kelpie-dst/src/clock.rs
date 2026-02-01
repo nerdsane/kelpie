@@ -186,23 +186,29 @@ mod tests {
         assert!(!clock.is_past_ms(1500));
     }
 
-    #[tokio::test]
+    /// Test clock sleep with madsim runtime
+    ///
+    /// Note: This test uses madsim for deterministic task scheduling.
+    /// The SimClock's sleep_ms waits for manual time advancement via notify.
+    #[madsim::test]
+    #[allow(clippy::disallowed_methods)] // madsim intercepts tokio at compile time
     async fn test_clock_sleep() {
         let clock = SimClock::from_millis(0);
         let clock_clone = clock.clone();
 
-        // Spawn a task that sleeps
-        let handle = tokio::spawn(async move {
+        // Spawn a task that sleeps using SimClock
+        let handle = madsim::task::spawn(async move {
             clock_clone.sleep_ms(100).await;
             clock_clone.now_ms()
         });
 
-        // Advance time
-        tokio::task::yield_now().await;
+        // Advance time in steps
+        // Use madsim's sleep(0) for yielding to allow other tasks to run
+        madsim::time::sleep(std::time::Duration::from_millis(0)).await;
         clock.advance_ms(50);
-        tokio::task::yield_now().await;
+        madsim::time::sleep(std::time::Duration::from_millis(0)).await;
         clock.advance_ms(50);
-        tokio::task::yield_now().await;
+        madsim::time::sleep(std::time::Duration::from_millis(0)).await;
 
         let result = handle.await.unwrap();
         assert!(result >= 100);

@@ -8,7 +8,13 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+default = []
+dst = ["kelpie-dst"]
+
 [dependencies]
+# DST fault injection (optional, with dst feature)
+kelpie-dst = { workspace = true, optional = true }
 kelpie-core = { workspace = true }
 kelpie-runtime = { workspace = true }
 bytes = { workspace = true }
@@ -16,8 +22,11 @@ async-trait = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+serde_json = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
+wasi-common = "16"
+wasi-cap-std-sync = "16"
 
 [dev-dependencies]
 kelpie-dst = { workspace = true }

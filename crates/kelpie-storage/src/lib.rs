@@ -7,22 +7,18 @@
 //! Provides durable, transactional key-value storage for each actor.
 //! Supports multiple backends:
 //! - In-memory (for testing and DST)
-//! - FoundationDB (for production, requires `fdb` feature)
+//! - FoundationDB (production backend, enabled by default)
 //!
 //! # Features
 //!
-//! - `fdb` - Enable FoundationDB backend (requires FDB C client installed)
+//! - `fdb` - FoundationDB backend (default, requires FDB C client installed)
 
+pub mod fdb;
 pub mod kv;
 pub mod memory;
 pub mod transaction;
 
-#[cfg(feature = "fdb")]
-pub mod fdb;
-
+pub use fdb::{FdbActorTransaction, FdbKV};
 pub use kv::{ActorKV, ActorTransaction, KVOperation, ScopedKV};
 pub use memory::MemoryKV;
 pub use transaction::Transaction;
-
-#[cfg(feature = "fdb")]
-pub use fdb::{FdbActorTransaction, FdbKV};

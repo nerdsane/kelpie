@@ -76,18 +76,41 @@ if [ -n "$INITRD_FILE" ]; then
     echo "Initrd: $INITRD_FILE"
 fi
 
-# Extract kernel
+# Extract kernel - need raw Image format for VZLinuxBootLoader, not EFI stub
 echo -e "${YELLOW}Extracting kernel...${NC}"
 OUTPUT_KERNEL="$OUTPUT_DIR/vmlinuz-$ALPINE_ARCH"
+
+# First copy the vmlinuz
 docker cp "$CONTAINER_ID:$KERNEL_FILE" "$OUTPUT_KERNEL"
 
-if [ -f "$OUTPUT_KERNEL" ]; then
-    KERNEL_SIZE=$(du -h "$OUTPUT_KERNEL" | cut -f1)
-    echo -e "${GREEN}✓ Kernel extracted: $OUTPUT_KERNEL ($KERNEL_SIZE)${NC}"
-else
+if [ ! -f "$OUTPUT_KERNEL" ]; then
     echo -e "${RED}✗ Failed to extract kernel${NC}"
     exit 1
 fi
+
+# Check if it's EFI stub format (PE32+) - if so, extract raw Image
+FILE_TYPE=$(file "$OUTPUT_KERNEL")
+if echo "$FILE_TYPE" | grep -q "PE32+"; then
+    echo -e "${YELLOW}Kernel is EFI stub format, extracting raw Image...${NC}"
+
+    # Find gzip offset and extract
+    GZIP_OFFSET=$(od -A d -t x1 "$OUTPUT_KERNEL" | grep "1f 8b 08" | head -1 | awk '{print $1}')
+
+    if [ -n "$GZIP_OFFSET" ]; then
+        dd if="$OUTPUT_KERNEL" of="$OUTPUT_KERNEL.gz" bs=1 skip="$GZIP_OFFSET" 2>/dev/null
+        gunzip -c "$OUTPUT_KERNEL.gz" > "$OUTPUT_KERNEL.tmp" 2>/dev/null
+        mv "$OUTPUT_KERNEL.tmp" "$OUTPUT_KERNEL"
+        rm -f "$OUTPUT_KERNEL.gz"
+
+        NEW_TYPE=$(file "$OUTPUT_KERNEL")
+        echo "  Extracted: $NEW_TYPE"
+    else
+        echo -e "${YELLOW}Warning: Could not find gzip offset, keeping original${NC}"
+    fi
+fi
+
+KERNEL_SIZE=$(du -h "$OUTPUT_KERNEL" | cut -f1)
+echo -e "${GREEN}✓ Kernel extracted: $OUTPUT_KERNEL ($KERNEL_SIZE)${NC}"
 
 # Extract initrd if present
 if [ -n "$INITRD_FILE" ]; then

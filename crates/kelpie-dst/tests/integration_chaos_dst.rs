@@ -3,6 +3,9 @@
 //! TigerStyle: Full system DST with all components integrated.
 //! These tests verify the system handles multiple simultaneous faults gracefully.
 
+// Allow direct tokio usage in test code
+#![allow(clippy::disallowed_methods)]
+
 use bytes::Bytes;
 use kelpie_core::Result;
 use kelpie_dst::{
@@ -32,7 +35,7 @@ use kelpie_sandbox::{Sandbox, SandboxConfig, SandboxFactory, SandboxState, Snaps
 /// - StorageWriteFail (5%)
 /// - StorageReadFail (5%)
 /// - NetworkDelay (20%)
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_full_teleport_workflow_under_chaos() {
     let config = SimConfig::new(6001);
 
@@ -168,7 +171,7 @@ async fn run_teleport_workflow(
 /// Test sandbox lifecycle under heavy chaos
 ///
 /// Tests rapid create/start/exec/stop cycles with all sandbox faults active.
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_sandbox_lifecycle_under_chaos() {
     let config = SimConfig::new(6002);
 
@@ -240,7 +243,7 @@ async fn run_sandbox_lifecycle(factory: &SimSandboxFactory, iteration: usize) ->
 /// Test snapshot operations under chaos
 ///
 /// Heavy snapshot create/restore cycles with corruption and failure faults.
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_snapshot_operations_under_chaos() {
     let config = SimConfig::new(6003);
 
@@ -324,7 +327,7 @@ async fn test_dst_snapshot_operations_under_chaos() {
 /// Test teleport storage operations under chaos
 ///
 /// Upload/download cycles with high failure rates.
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_teleport_storage_under_chaos() {
     let config = SimConfig::new(6004);
 
@@ -417,7 +420,7 @@ async fn test_dst_teleport_storage_under_chaos() {
 }
 
 /// Test determinism under chaos - same seed must produce same results
-#[tokio::test]
+#[madsim::test]
 async fn test_dst_chaos_determinism() {
     // Run the same chaos scenario twice with same seed
     let seed = 6005;
@@ -478,7 +481,7 @@ async fn test_dst_chaos_determinism() {
 /// Stress test: 100 concurrent teleport operations
 ///
 /// Run with: cargo test stress_test_concurrent_teleports --release -- --ignored
-#[tokio::test]
+#[madsim::test]
 #[ignore]
 async fn stress_test_concurrent_teleports() {
     let config = SimConfig::new(6100);
@@ -538,7 +541,7 @@ async fn stress_test_concurrent_teleports() {
 /// Stress test: Rapid sandbox lifecycle cycles
 ///
 /// Run with: cargo test stress_test_rapid_sandbox_lifecycle --release -- --ignored
-#[tokio::test]
+#[madsim::test]
 #[ignore]
 async fn stress_test_rapid_sandbox_lifecycle() {
     let config = SimConfig::new(6101);
@@ -595,7 +598,7 @@ async fn stress_test_rapid_sandbox_lifecycle() {
 /// Stress test: Rapid suspend/resume cycles
 ///
 /// Run with: cargo test stress_test_rapid_suspend_resume --release -- --ignored
-#[tokio::test]
+#[madsim::test]
 #[ignore]
 async fn stress_test_rapid_suspend_resume() {
     let config = SimConfig::new(6102);
@@ -662,7 +665,7 @@ async fn stress_test_rapid_suspend_resume() {
 /// Stress test: Many snapshots with varying sizes
 ///
 /// Run with: cargo test stress_test_many_snapshots --release -- --ignored
-#[tokio::test]
+#[madsim::test]
 #[ignore]
 async fn stress_test_many_snapshots() {
     let config = SimConfig::new(6103);

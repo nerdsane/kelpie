@@ -8,6 +8,7 @@
 use crate::api::ApiError;
 use axum::{extract::Path, extract::Query, routing::get, Router};
 use axum::{extract::State, Json};
+use kelpie_core::Runtime;
 use kelpie_server::models::{CreateProjectRequest, ListResponse, Project, UpdateProjectRequest};
 use kelpie_server::state::AppState;
 use serde::Deserialize;
@@ -18,7 +19,7 @@ const PROJECTS_COUNT_MAX: usize = 1_000;
 const PROJECT_NAME_LENGTH_MAX: usize = 256;
 
 /// Create projects routes
-pub fn router() -> Router<AppState> {
+pub fn router<R: Runtime + 'static>() -> Router<AppState<R>> {
     Router::new()
         .route("/projects", get(list_projects).post(create_project))
         .route(
@@ -34,8 +35,8 @@ pub fn router() -> Router<AppState> {
 ///
 /// POST /v1/projects
 #[instrument(skip(state, request), fields(name = %request.name), level = "info")]
-async fn create_project(
-    State(state): State<AppState>,
+async fn create_project<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Json(request): Json<CreateProjectRequest>,
 ) -> Result<Json<Project>, ApiError> {
     // Validate name
@@ -76,8 +77,8 @@ async fn create_project(
 ///
 /// GET /v1/projects/{project_id}
 #[instrument(skip(state), fields(project_id = %project_id), level = "info")]
-async fn get_project(
-    State(state): State<AppState>,
+async fn get_project<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(project_id): Path<String>,
 ) -> Result<Json<Project>, ApiError> {
     let project = state
@@ -91,8 +92,8 @@ async fn get_project(
 ///
 /// GET /v1/projects?cursor={cursor}&limit={limit}
 #[instrument(skip(state, query), fields(cursor = ?query.cursor, limit = query.limit), level = "info")]
-async fn list_projects(
-    State(state): State<AppState>,
+async fn list_projects<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Query(query): Query<ListProjectsQuery>,
 ) -> Result<Json<ListProjectsResponse>, ApiError> {
     let limit = query.limit.unwrap_or(50).min(100);
@@ -142,8 +143,8 @@ struct ListProjectsResponse {
 ///
 /// PATCH /v1/projects/{project_id}
 #[instrument(skip(state, request), fields(project_id = %project_id), level = "info")]
-async fn update_project(
-    State(state): State<AppState>,
+async fn update_project<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(project_id): Path<String>,
     Json(request): Json<UpdateProjectRequest>,
 ) -> Result<Json<Project>, ApiError> {
@@ -180,8 +181,8 @@ async fn update_project(
 ///
 /// DELETE /v1/projects/{project_id}
 #[instrument(skip(state), fields(project_id = %project_id), level = "info")]
-async fn delete_project(
-    State(state): State<AppState>,
+async fn delete_project<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(project_id): Path<String>,
 ) -> Result<(), ApiError> {
     // Check if project has agents
@@ -204,8 +205,8 @@ async fn delete_project(
 ///
 /// GET /v1/projects/{project_id}/agents
 #[instrument(skip(state, query), fields(project_id = %project_id), level = "info")]
-async fn list_project_agents(
-    State(state): State<AppState>,
+async fn list_project_agents<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(project_id): Path<String>,
     Query(query): Query<ListProjectAgentsQuery>,
 ) -> Result<Json<ListResponse<kelpie_server::models::AgentState>>, ApiError> {
@@ -253,7 +254,7 @@ mod tests {
 
     /// Create test app
     async fn test_app() -> Router {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         api::router(state)
     }
 

@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use kelpie_core::actor::ActorId;
-use kelpie_core::Result;
+use kelpie_core::{CurrentRuntime, Result, Runtime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig, DispatcherHandle};
 use kelpie_server::actor::{
@@ -117,7 +117,10 @@ impl LlmClient for SimLlmClientAdapter {
 }
 
 /// Helper to create a dispatcher with AgentActor
-fn create_dispatcher(sim_env: &SimEnvironment) -> Result<DispatcherHandle> {
+fn create_dispatcher<R: Runtime + 'static>(
+    runtime: R,
+    sim_env: &SimEnvironment,
+) -> Result<DispatcherHandle<R>> {
     // Create SimLlmClient from environment
     let sim_llm = SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone());
 
@@ -136,13 +139,17 @@ fn create_dispatcher(sim_env: &SimEnvironment) -> Result<DispatcherHandle> {
     let kv = Arc::new(sim_env.storage.clone());
 
     // Create dispatcher
-    let mut dispatcher =
-        Dispatcher::<AgentActor, AgentActorState>::new(factory, kv, DispatcherConfig::default());
+    let mut dispatcher = Dispatcher::<AgentActor, AgentActorState, _>::new(
+        factory,
+        kv,
+        DispatcherConfig::default(),
+        runtime.clone(),
+    );
 
     let handle = dispatcher.handle();
 
     // Spawn dispatcher task
-    tokio::spawn(async move {
+    let _dispatcher_handle = runtime.spawn(async move {
         dispatcher.run().await;
     });
 
@@ -158,8 +165,8 @@ fn to_bytes<T: serde::Serialize>(value: &T) -> Result<Bytes> {
 }
 
 /// Helper to invoke and deserialize response
-async fn invoke_deserialize<T: serde::de::DeserializeOwned>(
-    dispatcher: &DispatcherHandle,
+async fn invoke_deserialize<T: serde::de::DeserializeOwned, R: Runtime>(
+    dispatcher: &DispatcherHandle<R>,
     actor_id: ActorId,
     operation: &str,
     payload: Bytes,
@@ -178,14 +185,15 @@ async fn invoke_deserialize<T: serde::de::DeserializeOwned>(
 /// - Create agent → actor activates
 /// - State loads from storage (or creates if new)
 /// - Actor is ready to handle messages
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_actor_activation_basic() {
     let config = SimConfig::new(42);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
             // Create dispatcher
-            let dispatcher = create_dispatcher(&sim_env)?;
+            let dispatcher = create_dispatcher(kelpie_core::current_runtime(), &sim_env)?;
 
             // Create agent
             let actor_id = ActorId::new("agents", "agent-test-001")?;
@@ -202,6 +210,8 @@ async fn test_dst_agent_actor_activation_basic() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
 
             // Activate actor by invoking create
@@ -230,14 +240,15 @@ async fn test_dst_agent_actor_activation_basic() {
 /// - 20% storage read fault rate
 /// - Actor should handle gracefully (retry or return error)
 /// - Should not panic or corrupt state
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_actor_activation_with_storage_fail() {
     let config = SimConfig::new(12345);
 
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageReadFail, 0.2))
         .run_async(|sim_env| async move {
-            let dispatcher = create_dispatcher(&sim_env)?;
+            let dispatcher = create_dispatcher(kelpie_core::current_runtime(), &sim_env)?;
 
             let mut success_count = 0;
             let mut failure_count = 0;
@@ -257,6 +268,8 @@ async fn test_dst_agent_actor_activation_with_storage_fail() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 };
 
                 match dispatcher
@@ -294,13 +307,14 @@ async fn test_dst_agent_actor_activation_with_storage_fail() {
 /// - Deactivate actor → state written to storage
 /// - Reactivate actor → state loaded correctly
 /// - All data preserved across activation cycles
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_actor_deactivation_persists_state() {
     let config = SimConfig::new(54321);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let dispatcher = create_dispatcher(&sim_env)?;
+            let dispatcher = create_dispatcher(kelpie_core::current_runtime(), &sim_env)?;
             let actor_id = ActorId::new("agents", "agent-persistent")?;
 
             // Create and activate
@@ -322,6 +336,8 @@ async fn test_dst_agent_actor_deactivation_persists_state() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             dispatcher
                 .invoke(actor_id.clone(), "create".to_string(), to_bytes(&request)?)
@@ -352,14 +368,15 @@ async fn test_dst_agent_actor_deactivation_persists_state() {
 /// - 20% storage write fault rate
 /// - Actor should retry or fail gracefully
 /// - State should remain consistent (no partial writes)
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_actor_deactivation_with_storage_fail() {
     let config = SimConfig::new(99999);
 
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.2))
         .run_async(|sim_env| async move {
-            let dispatcher = create_dispatcher(&sim_env)?;
+            let dispatcher = create_dispatcher(kelpie_core::current_runtime(), &sim_env)?;
 
             let mut success_count = 0;
             let mut failure_count = 0;
@@ -379,6 +396,8 @@ async fn test_dst_agent_actor_deactivation_with_storage_fail() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 };
 
                 // Try to create (may fail with storage faults during activation reads)
@@ -435,14 +454,15 @@ async fn test_dst_agent_actor_deactivation_with_storage_fail() {
 /// - CrashAfterWrite fault → actor crashes after writing
 /// - State should be consistent (transaction committed or rolled back)
 /// - Actor can be reactivated and continue
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_actor_crash_recovery() {
     let config = SimConfig::new(77777);
 
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::CrashAfterWrite, 0.1))
         .run_async(|sim_env| async move {
-            let dispatcher = create_dispatcher(&sim_env)?;
+            let dispatcher = create_dispatcher(kelpie_core::current_runtime(), &sim_env)?;
             let actor_id = ActorId::new("agents", "agent-crash-test")?;
 
             // Create agent
@@ -464,6 +484,8 @@ async fn test_dst_agent_actor_crash_recovery() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             dispatcher
                 .invoke(actor_id.clone(), "create".to_string(), to_bytes(&request)?)
@@ -507,13 +529,14 @@ async fn test_dst_agent_actor_crash_recovery() {
 /// - core_memory_append → updates block in state
 /// - State persisted to storage
 /// - Next message sees updated block in prompt
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_memory_tools() {
     let config = SimConfig::new(55555);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let dispatcher = create_dispatcher(&sim_env)?;
+            let dispatcher = create_dispatcher(kelpie_core::current_runtime(), &sim_env)?;
             let actor_id = ActorId::new("agents", "agent-memory-test")?;
 
             // Create agent
@@ -535,6 +558,8 @@ async fn test_dst_agent_memory_tools() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             dispatcher
                 .invoke(actor_id.clone(), "create".to_string(), to_bytes(&request)?)
@@ -588,13 +613,14 @@ struct MessageResponse {
 /// - Send user message → actor builds prompt → calls LLM → returns response
 /// - Message stored in conversation history
 /// - State updated correctly
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_handle_message_basic() {
     let config = SimConfig::new(11111);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let dispatcher = create_dispatcher(&sim_env)?;
+            let dispatcher = create_dispatcher(kelpie_core::current_runtime(), &sim_env)?;
             let actor_id = ActorId::new("agents", "agent-chat-test")?;
 
             // Create agent
@@ -616,6 +642,8 @@ async fn test_dst_agent_handle_message_basic() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             dispatcher
                 .invoke(actor_id.clone(), "create".to_string(), to_bytes(&request)?)
@@ -651,14 +679,15 @@ async fn test_dst_agent_handle_message_basic() {
 /// - LlmTimeout fault → actor returns error gracefully
 /// - State remains consistent
 /// - Agent can retry on next message
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_handle_message_with_llm_timeout() {
     let config = SimConfig::new(22222);
 
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::LlmTimeout, 0.3))
         .run_async(|sim_env| async move {
-            let dispatcher = create_dispatcher(&sim_env)?;
+            let dispatcher = create_dispatcher(kelpie_core::current_runtime(), &sim_env)?;
             let actor_id = ActorId::new("agents", "agent-timeout-test")?;
 
             // Create agent
@@ -675,6 +704,8 @@ async fn test_dst_agent_handle_message_with_llm_timeout() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             dispatcher
                 .invoke(actor_id.clone(), "create".to_string(), to_bytes(&request)?)
@@ -688,7 +719,7 @@ async fn test_dst_agent_handle_message_with_llm_timeout() {
                     role: "user".to_string(),
                     content: format!("Message {}", i),
                 };
-                match invoke_deserialize::<MessageResponse>(
+                match invoke_deserialize::<MessageResponse, CurrentRuntime>(
                     &dispatcher,
                     actor_id.clone(),
                     "handle_message",
@@ -728,14 +759,15 @@ async fn test_dst_agent_handle_message_with_llm_timeout() {
 /// - LlmFailure fault → actor returns error gracefully
 /// - Error message is informative
 /// - Agent state not corrupted
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_handle_message_with_llm_failure() {
     let config = SimConfig::new(33333);
 
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::LlmFailure, 0.5))
         .run_async(|sim_env| async move {
-            let dispatcher = create_dispatcher(&sim_env)?;
+            let dispatcher = create_dispatcher(kelpie_core::current_runtime(), &sim_env)?;
             let actor_id = ActorId::new("agents", "agent-failure-test")?;
 
             // Create agent
@@ -752,6 +784,8 @@ async fn test_dst_agent_handle_message_with_llm_failure() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             dispatcher
                 .invoke(actor_id.clone(), "create".to_string(), to_bytes(&request)?)
@@ -765,7 +799,7 @@ async fn test_dst_agent_handle_message_with_llm_failure() {
                     role: "user".to_string(),
                     content: format!("Message {}", i),
                 };
-                match invoke_deserialize::<MessageResponse>(
+                match invoke_deserialize::<MessageResponse, CurrentRuntime>(
                     &dispatcher,
                     actor_id.clone(),
                     "handle_message",
@@ -809,13 +843,14 @@ async fn test_dst_agent_handle_message_with_llm_failure() {
 /// - LLM requests tool → actor executes tool → returns result to LLM
 /// - Tool result included in next LLM call
 /// - Conversation history includes tool calls
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_tool_execution() {
     let config = SimConfig::new(44444);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let dispatcher = create_dispatcher(&sim_env)?;
+            let dispatcher = create_dispatcher(kelpie_core::current_runtime(), &sim_env)?;
             let actor_id = ActorId::new("agents", "agent-tool-test")?;
 
             // Create agent with tools
@@ -832,6 +867,8 @@ async fn test_dst_agent_tool_execution() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             dispatcher
                 .invoke(actor_id.clone(), "create".to_string(), to_bytes(&request)?)

@@ -3,6 +3,7 @@
 //! TigerStyle: These models mirror Letta's API schema for compatibility.
 
 use chrono::{DateTime, Utc};
+use croner::Cron;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -16,7 +17,9 @@ use uuid::Uuid;
 #[allow(clippy::enum_variant_names)] // Matches Letta's API naming
 pub enum AgentType {
     #[default]
+    #[serde(alias = "memgpt")]
     MemgptAgent,
+    #[serde(alias = "letta_v1")]
     LettaV1Agent,
     ReactAgent,
 }
@@ -67,6 +70,7 @@ impl AgentType {
                     "archival_memory_search".to_string(),
                     "conversation_search".to_string(),
                     "pause_heartbeats".to_string(),
+                    "propose_improvement".to_string(),
                 ],
                 supports_heartbeats: true,
                 system_prompt_template: None, // Use default
@@ -112,6 +116,12 @@ pub struct CreateAgentRequest {
     pub description: Option<String>,
     /// Optional project ID (Phase 6: Projects)
     pub project_id: Option<String>,
+    /// User ID (Letta compatibility - owner of the agent)
+    #[serde(default)]
+    pub user_id: Option<String>,
+    /// Organization ID (Letta compatibility - org context)
+    #[serde(default)]
+    pub org_id: Option<String>,
     /// Initial memory blocks (inline creation)
     #[serde(default)]
     pub memory_blocks: Vec<CreateBlockRequest>,
@@ -134,7 +144,31 @@ fn default_agent_name() -> String {
 }
 
 fn default_embedding_model() -> Option<String> {
-    Some("openai/text-embedding-3-small".to_string())
+    // Allow configuration via environment variable, fall back to sensible default
+    std::env::var("KELPIE_DEFAULT_EMBEDDING_MODEL")
+        .ok()
+        .or_else(|| Some("openai/text-embedding-3-small".to_string()))
+}
+
+impl Default for CreateAgentRequest {
+    fn default() -> Self {
+        Self {
+            name: default_agent_name(),
+            agent_type: AgentType::default(),
+            model: None,
+            embedding: default_embedding_model(),
+            system: None,
+            description: None,
+            project_id: None,
+            user_id: None,
+            org_id: None,
+            memory_blocks: Vec::new(),
+            block_ids: Vec::new(),
+            tool_ids: Vec::new(),
+            tags: Vec::new(),
+            metadata: serde_json::Value::Null,
+        }
+    }
 }
 
 /// Request to update an agent
@@ -175,6 +209,12 @@ pub struct AgentState {
     pub description: Option<String>,
     /// Optional project ID (Phase 6: Projects)
     pub project_id: Option<String>,
+    /// User ID (Letta compatibility - owner of the agent)
+    #[serde(default)]
+    pub user_id: Option<String>,
+    /// Organization ID (Letta compatibility - org context)
+    #[serde(default)]
+    pub org_id: Option<String>,
     /// Memory blocks
     pub blocks: Vec<Block>,
     /// Attached tool IDs
@@ -210,6 +250,8 @@ impl AgentState {
             system: request.system,
             description: request.description,
             project_id: request.project_id,
+            user_id: request.user_id,
+            org_id: request.org_id,
             blocks,
             tool_ids: request.tool_ids,
             tags: request.tags,
@@ -552,8 +594,21 @@ pub struct Message {
     pub content: String,
     /// Tool call ID if this is a tool response
     pub tool_call_id: Option<String>,
-    /// Tool calls made by assistant
-    pub tool_calls: Option<Vec<ToolCall>>,
+    /// Tool calls made by assistant (OpenAI format - plural array)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCall>,
+    /// Single tool call (Letta SDK format - singular)
+    /// Used for tool_call_message types to match Letta SDK expectations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call: Option<LettaToolCall>,
+    /// Tool return result (Letta SDK format)
+    /// Used for tool_return_message types
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_return: Option<String>,
+    /// Tool execution status ("success" or "error")
+    /// Used for tool_return_message types
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
     /// Creation timestamp
     #[serde(rename = "date")]
     pub created_at: DateTime<Utc>,
@@ -571,7 +626,7 @@ impl Message {
     }
 }
 
-/// Tool call in a message
+/// Tool call in a message (OpenAI format)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
     /// Tool call ID
@@ -580,6 +635,18 @@ pub struct ToolCall {
     pub name: String,
     /// Tool arguments as JSON
     pub arguments: serde_json::Value,
+}
+
+/// Tool call in Letta format (singular, with tool_call_id inside)
+/// Used for tool_call_message types to match Letta SDK expectations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LettaToolCall {
+    /// Tool name
+    pub name: String,
+    /// Tool arguments as JSON string (Letta SDK expects string, not object)
+    pub arguments: String,
+    /// Tool call ID
+    pub tool_call_id: String,
 }
 
 /// Tool that requires client-side execution
@@ -824,8 +891,9 @@ pub struct MessageImportData {
     pub content: String,
     /// Tool call ID if this is a tool response
     pub tool_call_id: Option<String>,
-    /// Tool calls made by assistant
-    pub tool_calls: Option<Vec<ToolCall>>,
+    /// Tool calls made by assistant (OpenAI/Letta spec - plural array)
+    #[serde(default)]
+    pub tool_calls: Vec<ToolCall>,
 }
 
 /// Response from exporting an agent
@@ -1056,9 +1124,11 @@ fn calculate_next_run(
                 .map(|dt| dt.with_timezone(&Utc))
         }
         ScheduleType::Cron => {
-            // For now, return None (cron parsing would require cron library)
-            // Production implementation would use a cron parser
-            None
+            // Parse cron expression using croner (builder pattern)
+            match Cron::new(schedule).parse() {
+                Ok(cron) => cron.find_next_occurrence(&from, false).ok(),
+                Err(_) => None,
+            }
         }
     }
 }
@@ -1152,29 +1222,37 @@ impl Project {
 // Agent Group models (Phase 8)
 // =========================================================================
 
-/// Routing policy for agent groups
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Routing policy for agent groups (Letta ManagerType compatibility)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RoutingPolicy {
+    #[default]
     RoundRobin,
     Broadcast,
     Intelligent,
-}
-
-impl Default for RoutingPolicy {
-    fn default() -> Self {
-        Self::RoundRobin
-    }
+    /// Supervisor-based routing (Letta compatibility)
+    Supervisor,
+    /// Dynamic routing (Letta compatibility)
+    Dynamic,
+    /// Sleeptime-based routing (Letta compatibility)
+    Sleeptime,
+    /// Voice sleeptime routing (Letta compatibility)
+    VoiceSleeptime,
+    /// Swarm routing (Letta compatibility)
+    Swarm,
 }
 
 /// Request to create an agent group
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateAgentGroupRequest {
-    pub name: String,
+    /// Optional name (auto-generated if not provided, for Letta compatibility)
+    #[serde(default)]
+    pub name: Option<String>,
     pub description: Option<String>,
     #[serde(default)]
     pub agent_ids: Vec<String>,
-    #[serde(default)]
+    /// Routing policy (accepted as "manager_type" in JSON for Letta compatibility)
+    #[serde(default, alias = "manager_type")]
     pub routing_policy: RoutingPolicy,
     #[serde(default)]
     pub metadata: serde_json::Value,
@@ -1185,12 +1263,144 @@ pub struct CreateAgentGroupRequest {
 pub struct UpdateAgentGroupRequest {
     pub name: Option<String>,
     pub description: Option<String>,
+    /// Routing policy (accepted as "manager_type" in JSON for Letta compatibility)
+    #[serde(alias = "manager_type")]
     pub routing_policy: Option<RoutingPolicy>,
     #[serde(default)]
     pub add_agent_ids: Vec<String>,
     #[serde(default)]
     pub remove_agent_ids: Vec<String>,
     pub metadata: Option<serde_json::Value>,
+}
+
+// ============================================================================
+// Identities
+// ============================================================================
+
+/// Identity type
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum IdentityType {
+    #[default]
+    User,
+    Org,
+    Other,
+}
+
+/// Request to create an identity
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateIdentityRequest {
+    pub name: String,
+    #[serde(default)]
+    pub identifier_key: Option<String>,
+    #[serde(default)]
+    pub identity_type: IdentityType,
+    #[serde(default)]
+    pub agent_ids: Vec<String>,
+    #[serde(default)]
+    pub block_ids: Vec<String>,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub properties: serde_json::Value,
+}
+
+/// Request to update an identity
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpdateIdentityRequest {
+    pub name: Option<String>,
+    pub identifier_key: Option<String>,
+    pub identity_type: Option<IdentityType>,
+    #[serde(default)]
+    pub add_agent_ids: Vec<String>,
+    #[serde(default)]
+    pub remove_agent_ids: Vec<String>,
+    #[serde(default)]
+    pub add_block_ids: Vec<String>,
+    #[serde(default)]
+    pub remove_block_ids: Vec<String>,
+    pub project_id: Option<String>,
+    pub properties: Option<serde_json::Value>,
+}
+
+/// Identity response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Identity {
+    pub id: String,
+    pub name: String,
+    pub identifier_key: String,
+    pub identity_type: IdentityType,
+    pub agent_ids: Vec<String>,
+    pub block_ids: Vec<String>,
+    pub project_id: Option<String>,
+    pub properties: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl Identity {
+    pub fn from_request(request: CreateIdentityRequest) -> Self {
+        let now = Utc::now();
+        let id = uuid::Uuid::new_v4().to_string();
+        let identifier_key = request
+            .identifier_key
+            .unwrap_or_else(|| format!("identity-{}", &id[..8]));
+
+        Self {
+            id,
+            name: request.name,
+            identifier_key,
+            identity_type: request.identity_type,
+            agent_ids: request.agent_ids,
+            block_ids: request.block_ids,
+            project_id: request.project_id,
+            properties: request.properties,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    pub fn apply_update(&mut self, request: UpdateIdentityRequest) {
+        if let Some(name) = request.name {
+            self.name = name;
+        }
+        if let Some(identifier_key) = request.identifier_key {
+            self.identifier_key = identifier_key;
+        }
+        if let Some(identity_type) = request.identity_type {
+            self.identity_type = identity_type;
+        }
+        if let Some(project_id) = request.project_id {
+            self.project_id = Some(project_id);
+        }
+        if let Some(properties) = request.properties {
+            self.properties = properties;
+        }
+
+        // Add agent IDs
+        for agent_id in request.add_agent_ids {
+            if !self.agent_ids.contains(&agent_id) {
+                self.agent_ids.push(agent_id);
+            }
+        }
+
+        // Remove agent IDs
+        self.agent_ids
+            .retain(|id| !request.remove_agent_ids.contains(id));
+
+        // Add block IDs
+        for block_id in request.add_block_ids {
+            if !self.block_ids.contains(&block_id) {
+                self.block_ids.push(block_id);
+            }
+        }
+
+        // Remove block IDs
+        self.block_ids
+            .retain(|id| !request.remove_block_ids.contains(id));
+
+        self.updated_at = Utc::now();
+    }
 }
 
 /// Agent group response
@@ -1200,6 +1410,8 @@ pub struct AgentGroup {
     pub name: String,
     pub description: Option<String>,
     pub agent_ids: Vec<String>,
+    /// Routing policy (serialized as "manager_type" for Letta compatibility)
+    #[serde(rename = "manager_type")]
     pub routing_policy: RoutingPolicy,
     pub shared_state: serde_json::Value,
     pub metadata: serde_json::Value,
@@ -1212,9 +1424,15 @@ pub struct AgentGroup {
 impl AgentGroup {
     pub fn from_request(request: CreateAgentGroupRequest) -> Self {
         let now = Utc::now();
+        let id = uuid::Uuid::new_v4().to_string();
+        // Auto-generate name if not provided (Letta compatibility)
+        let name = request
+            .name
+            .unwrap_or_else(|| format!("group-{}", &id[..8]));
+
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: request.name,
+            id,
+            name,
             description: request.description,
             agent_ids: request.agent_ids,
             routing_policy: request.routing_policy,
@@ -1266,6 +1484,8 @@ mod tests {
             system: Some("You are a helpful assistant".to_string()),
             description: Some("A test agent".to_string()),
             project_id: None,
+            user_id: None,
+            org_id: None,
             memory_blocks: vec![CreateBlockRequest {
                 label: "persona".to_string(),
                 value: "I am a helpful AI.".to_string(),
@@ -1294,6 +1514,8 @@ mod tests {
             system: None,
             description: None,
             project_id: None,
+            user_id: None,
+            org_id: None,
             memory_blocks: vec![],
             block_ids: vec![],
             tool_ids: vec![],
@@ -1323,6 +1545,137 @@ mod tests {
         let err = ErrorResponse::not_found("Agent", "abc123");
         assert_eq!(err.code, "not_found");
         assert!(err.message.contains("abc123"));
+    }
+
+    #[test]
+    fn test_calculate_next_run_interval() {
+        let from = Utc::now();
+        let next = calculate_next_run(&ScheduleType::Interval, "3600", from);
+        assert!(next.is_some());
+        let next_time = next.unwrap();
+        // Should be approximately 3600 seconds in the future
+        let diff = (next_time - from).num_seconds();
+        assert_eq!(diff, 3600);
+    }
+
+    #[test]
+    fn test_calculate_next_run_interval_invalid() {
+        let from = Utc::now();
+        let next = calculate_next_run(&ScheduleType::Interval, "not_a_number", from);
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn test_calculate_next_run_cron() {
+        let from = Utc::now();
+        // Every minute
+        let next = calculate_next_run(&ScheduleType::Cron, "* * * * *", from);
+        assert!(next.is_some());
+        let next_time = next.unwrap();
+        // Should be within 60 seconds (next minute)
+        let diff = (next_time - from).num_seconds();
+        assert!(
+            (0..=60).contains(&diff),
+            "Expected 0-60 seconds, got {}",
+            diff
+        );
+    }
+
+    #[test]
+    fn test_calculate_next_run_cron_hourly() {
+        let from = Utc::now();
+        // At minute 0 of every hour
+        let next = calculate_next_run(&ScheduleType::Cron, "0 * * * *", from);
+        assert!(next.is_some());
+        let next_time = next.unwrap();
+        // Should be within 60 minutes
+        let diff = (next_time - from).num_seconds();
+        assert!(
+            (0..=3600).contains(&diff),
+            "Expected 0-3600 seconds, got {}",
+            diff
+        );
+    }
+
+    #[test]
+    fn test_calculate_next_run_cron_invalid() {
+        let from = Utc::now();
+        let next = calculate_next_run(&ScheduleType::Cron, "invalid cron", from);
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn test_calculate_next_run_once() {
+        let from = Utc::now();
+        let future_time = from + chrono::Duration::hours(1);
+        let schedule = future_time.to_rfc3339();
+        let next = calculate_next_run(&ScheduleType::Once, &schedule, from);
+        assert!(next.is_some());
+        // The returned time should match the schedule
+        let next_time = next.unwrap();
+        let diff = (next_time - future_time).num_seconds().abs();
+        assert!(diff < 2, "Times should match within 2 seconds");
+    }
+
+    #[test]
+    fn test_calculate_next_run_once_invalid() {
+        let from = Utc::now();
+        let next = calculate_next_run(&ScheduleType::Once, "not-a-date", from);
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn test_agent_type_letta_aliases() {
+        // Test that "memgpt" deserializes to AgentType::MemgptAgent
+        let json = r#"{"agent_type": "memgpt"}"#;
+        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
+        let agent_type: AgentType = serde_json::from_value(parsed["agent_type"].clone()).unwrap();
+        assert_eq!(agent_type, AgentType::MemgptAgent);
+
+        // Test that "letta_v1" deserializes to AgentType::LettaV1Agent
+        let json = r#"{"agent_type": "letta_v1"}"#;
+        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
+        let agent_type: AgentType = serde_json::from_value(parsed["agent_type"].clone()).unwrap();
+        assert_eq!(agent_type, AgentType::LettaV1Agent);
+
+        // Test that snake_case names still work (backward compatibility)
+        let json = r#"{"agent_type": "memgpt_agent"}"#;
+        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
+        let agent_type: AgentType = serde_json::from_value(parsed["agent_type"].clone()).unwrap();
+        assert_eq!(agent_type, AgentType::MemgptAgent);
+
+        let json = r#"{"agent_type": "letta_v1_agent"}"#;
+        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
+        let agent_type: AgentType = serde_json::from_value(parsed["agent_type"].clone()).unwrap();
+        assert_eq!(agent_type, AgentType::LettaV1Agent);
+    }
+
+    #[test]
+    fn test_create_agent_request_with_letta_alias() {
+        // Test that CreateAgentRequest accepts "memgpt" alias
+        let json = r#"{"name": "test", "agent_type": "memgpt"}"#;
+        let request: CreateAgentRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.agent_type, AgentType::MemgptAgent);
+        assert_eq!(request.name, "test");
+    }
+
+    #[test]
+    fn test_job_from_request_with_cron() {
+        let request = CreateJobRequest {
+            agent_id: "agent-1".to_string(),
+            schedule_type: ScheduleType::Cron,
+            schedule: "0 0 * * *".to_string(), // Daily at midnight
+            action: JobAction::SummarizeConversation,
+            action_params: serde_json::json!({}),
+            description: Some("Daily summary".to_string()),
+        };
+
+        let job = Job::from_request(request);
+        assert_eq!(job.schedule_type, ScheduleType::Cron);
+        assert!(
+            job.next_run.is_some(),
+            "Cron job should have next_run calculated"
+        );
     }
 }
 

@@ -1,0 +1,34 @@
+TLC2 Version 2.20 of Day Month 20?? (rev: f0fd12a)
+Running breadth-first search Model-Checking with fp 35 and seed -322221797375512799 with 1 worker on 16 cores with 27300MB heap and 64MB offheap memory [pid: 56159] (Mac OS X 15.3 aarch64, Oracle Corporation 21.0.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Parsing file /Users/seshendranalla/Development/kelpie-issue-75/docs/tla/KelpieMultiAgentInvocation.tla
+Parsing file /private/var/folders/6m/lm283ng13931_42z4z8n1x7c0000gn/T/tlc-6002168919933494138/Integers.tla (jar:file:/Users/seshendranalla/tla2tools.jar!/tla2sany/StandardModules/Integers.tla)
+Parsing file /private/var/folders/6m/lm283ng13931_42z4z8n1x7c0000gn/T/tlc-6002168919933494138/Sequences.tla (jar:file:/Users/seshendranalla/tla2tools.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file /private/var/folders/6m/lm283ng13931_42z4z8n1x7c0000gn/T/tlc-6002168919933494138/FiniteSets.tla (jar:file:/Users/seshendranalla/tla2tools.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /private/var/folders/6m/lm283ng13931_42z4z8n1x7c0000gn/T/tlc-6002168919933494138/_TLCTrace.tla (jar:file:/Users/seshendranalla/tla2tools.jar!/tla2sany/StandardModules/_TLCTrace.tla)
+Parsing file /private/var/folders/6m/lm283ng13931_42z4z8n1x7c0000gn/T/tlc-6002168919933494138/Naturals.tla (jar:file:/Users/seshendranalla/tla2tools.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /private/var/folders/6m/lm283ng13931_42z4z8n1x7c0000gn/T/tlc-6002168919933494138/TLC.tla (jar:file:/Users/seshendranalla/tla2tools.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /private/var/folders/6m/lm283ng13931_42z4z8n1x7c0000gn/T/tlc-6002168919933494138/TLCExt.tla (jar:file:/Users/seshendranalla/tla2tools.jar!/tla2sany/StandardModules/TLCExt.tla)
+Semantic processing of module Naturals
+Semantic processing of module Integers
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module TLCExt
+Semantic processing of module _TLCTrace
+Semantic processing of module KelpieMultiAgentInvocation
+Linting of module TLCExt
+Linting of module _TLCTrace
+Linting of module KelpieMultiAgentInvocation
+Starting... (2026-01-28 12:09:10)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-01-28 12:09:10.
+Progress(95) at 2026-01-28 12:09:13: 848,679 states generated (848,679 s/min), 286,839 distinct states found (286,839 ds/min), 8,909 states left on queue.
+Model checking completed. No error has been found.
+  Estimates of the probability that TLC did not check all reachable states
+  because two distinct states had the same fingerprint:
+  calculated (optimistic):  val = 1.7E-8
+  based on the actual fingerprints:  val = 1.4E-9
+1191134 states generated, 390951 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 107.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 4 and the 95th percentile is 1).
+Finished in 04s at (2026-01-28 12:09:14)

@@ -9,6 +9,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use kelpie_core::Runtime;
 use kelpie_server::state::{AppState, ToolInfo};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -50,6 +51,12 @@ pub struct ToolResponse {
     /// Tool type (builtin, custom, client)
     #[serde(default = "default_tool_type")]
     pub tool_type: String,
+    /// Tags for categorization (Letta compatibility)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+    /// Character limit for return value (Letta compatibility)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub return_char_limit: Option<u32>,
 }
 
 fn default_tool_type() -> String {
@@ -66,6 +73,8 @@ impl From<ToolInfo> for ToolResponse {
             source: info.source,
             default_requires_approval: info.default_requires_approval,
             tool_type: info.tool_type,
+            tags: info.tags,
+            return_char_limit: info.return_char_limit,
         }
     }
 }
@@ -108,6 +117,12 @@ pub struct RegisterToolRequest {
     /// Tool type: "custom", "client", "builtin"
     #[serde(default)]
     pub tool_type: Option<String>,
+    /// Tags for categorization (Letta compatibility)
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    /// Character limit for return value (Letta compatibility)
+    #[serde(default)]
+    pub return_char_limit: Option<u32>,
 }
 
 /// Request to upsert a tool (PUT) - Letta SDK uses this
@@ -142,6 +157,12 @@ pub struct UpsertToolRequest {
     /// Tool type: "custom", "client", "builtin"
     #[serde(default)]
     pub tool_type: Option<String>,
+    /// Tags for categorization (Letta compatibility)
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    /// Character limit for return value (Letta compatibility)
+    #[serde(default)]
+    pub return_char_limit: Option<u32>,
 }
 
 /// Request to execute a tool
@@ -160,10 +181,16 @@ pub struct ExecuteToolResponse {
 }
 
 /// Create the tools router
-pub fn router() -> Router<AppState> {
+pub fn router<R: Runtime + 'static>() -> Router<AppState<R>> {
     Router::new()
         .route("/", get(list_tools).post(register_tool).put(upsert_tool))
-        .route("/:name_or_id", get(get_tool).delete(delete_tool))
+        .route(
+            "/:name_or_id",
+            get(get_tool)
+                .put(upsert_tool)
+                .patch(update_tool)
+                .delete(delete_tool),
+        )
         .route("/:name/execute", post(execute_tool))
 }
 
@@ -173,8 +200,8 @@ pub fn router() -> Router<AppState> {
 /// GET /v1/tools?name=<name>
 /// GET /v1/tools?id=<id>
 #[instrument(skip(state), level = "info")]
-async fn list_tools(
-    State(state): State<AppState>,
+async fn list_tools<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Query(query): Query<ListToolsQuery>,
 ) -> Json<ToolListResponse> {
     // Debug: Log the query parameters received
@@ -211,14 +238,27 @@ async fn list_tools(
         })
         .collect();
 
+    // Sort by ID for consistent pagination order
+    filtered.sort_by(|a, b| a.id.cmp(&b.id));
+
     // Apply cursor-based pagination if 'after' is specified
     if let Some(ref after_id) = query.after {
+        // DEBUG: Log all tool IDs and the cursor we're looking for
+        let all_ids: Vec<&str> = filtered.iter().map(|t| t.id.as_str()).collect();
+        tracing::info!(
+            cursor_id = %after_id,
+            ?all_ids,
+            filtered_count = filtered.len(),
+            "Pagination: searching for cursor in sorted list"
+        );
+
         // Find the position of the cursor ID
         if let Some(cursor_pos) = filtered.iter().position(|t| &t.id == after_id) {
+            tracing::info!(cursor_pos, "Found cursor at position");
             // Return only tools after the cursor
             filtered = filtered.into_iter().skip(cursor_pos + 1).collect();
         } else {
-            // Cursor not found - return empty list (already paginated past end)
+            tracing::warn!("Cursor ID not found in filtered list, returning empty");
             filtered.clear();
         }
     }
@@ -256,8 +296,8 @@ fn extract_function_name(source: &str) -> Option<String> {
 /// If tool exists, it updates; otherwise creates new.
 /// Name can be provided explicitly or extracted from source_code.
 #[instrument(skip(state, request), level = "info")]
-async fn upsert_tool(
-    State(state): State<AppState>,
+async fn upsert_tool<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Json(request): Json<UpsertToolRequest>,
 ) -> Result<Json<ToolResponse>, ApiError> {
     // Determine source code first (needed for name extraction)
@@ -311,6 +351,11 @@ async fn upsert_tool(
         let input_schema = request.input_schema.unwrap_or(existing_tool.input_schema);
         let source = source_code.or(existing_tool.source);
 
+        let tags = request.tags.or(existing_tool.tags);
+        let return_char_limit = request
+            .return_char_limit
+            .or(existing_tool.return_char_limit);
+
         let updated = state
             .upsert_tool(
                 existing_tool.id,
@@ -320,6 +365,8 @@ async fn upsert_tool(
                 source,
                 request.default_requires_approval,
                 tool_type,
+                tags,
+                return_char_limit,
             )
             .await
             .map_err(|e| ApiError::internal(format!("Failed to update tool: {}", e)))?;
@@ -355,7 +402,8 @@ async fn upsert_tool(
             }
         }
 
-        let id = Uuid::new_v4().to_string();
+        // Generate deterministic UUID from tool name for consistent IDs across requests
+        let id = Uuid::new_v5(&Uuid::NAMESPACE_DNS, tool_name.as_bytes()).to_string();
 
         let registered = state
             .upsert_tool(
@@ -366,6 +414,8 @@ async fn upsert_tool(
                 source_code,
                 request.default_requires_approval,
                 tool_type,
+                request.tags,
+                request.return_char_limit,
             )
             .await
             .map_err(|e| ApiError::internal(format!("Failed to register tool: {}", e)))?;
@@ -375,12 +425,68 @@ async fn upsert_tool(
     }
 }
 
+/// Update an existing tool (partial update)
+///
+/// PATCH /v1/tools/:name_or_id
+#[instrument(skip(state, request), fields(name_or_id = %name_or_id), level = "info")]
+async fn update_tool<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
+    Path(name_or_id): Path<String>,
+    Json(request): Json<UpsertToolRequest>,
+) -> Result<Json<ToolResponse>, ApiError> {
+    // Resolve ID to name if needed, or use name directly
+    let tool_name = if name_or_id.contains('-') && name_or_id.len() == 36 {
+        // Looks like a UUID - get tool by ID to find its name
+        if let Some(tool) = state.get_tool_by_id(&name_or_id).await {
+            tool.name
+        } else {
+            return Err(ApiError::not_found("tool", &name_or_id));
+        }
+    } else {
+        name_or_id
+    };
+
+    // Get existing tool
+    let existing = state
+        .get_tool(&tool_name)
+        .await
+        .ok_or_else(|| ApiError::not_found("tool", &tool_name))?;
+
+    // Merge with partial update - use existing values if not provided
+    let description = request.description.unwrap_or(existing.description);
+    let input_schema = request.input_schema.unwrap_or(existing.input_schema);
+    let source_code = request.source_code.or(request.source).or(existing.source);
+    let default_requires_approval = request.default_requires_approval;
+    let tool_type = request.tool_type.unwrap_or(existing.tool_type);
+    let tags = request.tags.or(existing.tags);
+    let return_char_limit = request.return_char_limit.or(existing.return_char_limit);
+
+    // Update the tool
+    let updated = state
+        .upsert_tool(
+            existing.id,
+            tool_name.clone(),
+            description,
+            input_schema,
+            source_code,
+            default_requires_approval,
+            tool_type,
+            tags,
+            return_char_limit,
+        )
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to update tool: {}", e)))?;
+
+    tracing::info!(name = %tool_name, "Updated tool (PATCH)");
+    Ok(Json(ToolResponse::from(updated)))
+}
+
 /// Register a new tool
 ///
 /// POST /v1/tools
 #[instrument(skip(state, request), level = "info")]
-async fn register_tool(
-    State(state): State<AppState>,
+async fn register_tool<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Json(request): Json<RegisterToolRequest>,
 ) -> Result<Json<ToolResponse>, ApiError> {
     let source_code = request.source_code.or(request.source);
@@ -462,7 +568,8 @@ async fn register_tool(
         }
     }
 
-    let id = Uuid::new_v4().to_string();
+    // Generate deterministic UUID from tool name for consistent IDs across requests
+    let id = Uuid::new_v5(&Uuid::NAMESPACE_DNS, tool_name.as_bytes()).to_string();
 
     // Register the tool
     let registered = state
@@ -474,6 +581,8 @@ async fn register_tool(
             source_code,
             request.default_requires_approval,
             tool_type,
+            request.tags,
+            request.return_char_limit,
         )
         .await
         .map_err(|e| ApiError::internal(format!("Failed to register tool: {}", e)))?;
@@ -485,8 +594,8 @@ async fn register_tool(
 
 /// Get a specific tool by name or ID
 #[instrument(skip(state), fields(name_or_id = %name_or_id), level = "info")]
-async fn get_tool(
-    State(state): State<AppState>,
+async fn get_tool<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(name_or_id): Path<String>,
 ) -> Result<Json<ToolResponse>, ApiError> {
     // Try by ID first (if it looks like a UUID)
@@ -507,8 +616,8 @@ async fn get_tool(
 
 /// Delete a tool by name or ID
 #[instrument(skip(state), fields(name_or_id = %name_or_id), level = "info")]
-async fn delete_tool(
-    State(state): State<AppState>,
+async fn delete_tool<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(name_or_id): Path<String>,
 ) -> Result<(), ApiError> {
     // Resolve ID to name if needed
@@ -533,8 +642,8 @@ async fn delete_tool(
 
 /// Execute a tool
 #[instrument(skip(state, request), fields(name = %name), level = "info")]
-async fn execute_tool(
-    State(state): State<AppState>,
+async fn execute_tool<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(name): Path<String>,
     Json(request): Json<ExecuteToolRequest>,
 ) -> Result<Json<ExecuteToolResponse>, ApiError> {
@@ -565,7 +674,7 @@ mod tests {
     use tower::ServiceExt;
 
     async fn test_app() -> Router {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         api::router(state)
     }
 

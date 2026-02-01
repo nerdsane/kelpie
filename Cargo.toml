@@ -10,7 +10,6 @@ members = [
     "crates/kelpie-tools",
     "crates/kelpie-wasm",
     "crates/kelpie-cluster",
-    "crates/kelpie-agent",
     "crates/kelpie-dst",
     "crates/kelpie-vm",
     "crates/kelpie-server",
@@ -69,6 +68,9 @@ hostname = "0.4"
 # Time - pin to 0.4.38 for Umi compatibility (arrow-arith conflict)
 chrono = { version = "=0.4.38", features = ["serde"] }
 
+# Cron scheduling
+croner = "2"
+
 # Hashing and checksums
 crc32fast = "1.3"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
@@ -101,6 +103,9 @@ foundationdb = { version = "0.10", features = ["fdb-7_3"] }
 # Formal verification
 stateright = "0.30"
 
+# Telegram bot
+teloxide = { version = "0.12", features = ["macros"] }
+
 # Testing
 proptest = "1.4"
 criterion = "0.5"
@@ -113,9 +118,9 @@ kelpie-core = { path = "crates/kelpie-core" }
 kelpie-runtime = { path = "crates/kelpie-runtime" }
 kelpie-registry = { path = "crates/kelpie-registry" }
 kelpie-storage = { path = "crates/kelpie-storage" }
+kelpie-server = { path = "crates/kelpie-server" }
 kelpie-wasm = { path = "crates/kelpie-wasm" }
 kelpie-cluster = { path = "crates/kelpie-cluster" }
-kelpie-agent = { path = "crates/kelpie-agent" }
 kelpie-dst = { path = "crates/kelpie-dst" }
 kelpie-memory = { path = "crates/kelpie-memory" }
 kelpie-sandbox = { path = "crates/kelpie-sandbox" }

@@ -7,6 +7,7 @@ use axum::{
     extract::{Path, Query, State},
     Json,
 };
+use kelpie_core::Runtime;
 use kelpie_server::models::ArchivalEntry;
 use kelpie_server::state::AppState;
 use serde::{Deserialize, Serialize};
@@ -48,6 +49,7 @@ fn default_limit() -> usize {
 /// Request to add to archival memory
 #[derive(Debug, Deserialize)]
 pub struct AddArchivalRequest {
+    #[serde(alias = "text")]
     pub content: String,
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
@@ -55,18 +57,27 @@ pub struct AddArchivalRequest {
 
 /// Search archival memory
 #[instrument(skip(state, query), fields(agent_id = %agent_id, query = ?query.q, limit = query.limit), level = "info")]
-pub async fn search_archival(
-    State(state): State<AppState>,
+pub async fn search_archival<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
     Query(query): Query<ArchivalSearchQuery>,
 ) -> Result<Json<ArchivalListResponse>, ApiError> {
-    // Verify agent exists
+    // Verify agent exists (using async method)
     state
-        .get_agent(&agent_id)?
+        .get_agent_async(&agent_id)
+        .await?
         .ok_or_else(|| ApiError::not_found("agent", &agent_id))?;
 
-    // Search archival memory
-    let entries = state.search_archival(&agent_id, query.q.as_deref(), query.limit)?;
+    // Single source of truth: Use AgentService
+    let service = state
+        .agent_service()
+        .ok_or_else(|| ApiError::internal("AgentService not configured"))?;
+
+    // Search archival memory via AgentService
+    let entries = service
+        .archival_search(&agent_id, query.q.as_deref().unwrap_or(""), query.limit)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to search archival: {}", e)))?;
 
     let count = entries.len();
     Ok(Json(ArchivalListResponse {
@@ -79,14 +90,15 @@ pub async fn search_archival(
 
 /// Add entry to archival memory
 #[instrument(skip(state, request), fields(agent_id = %agent_id), level = "info")]
-pub async fn add_archival(
-    State(state): State<AppState>,
+pub async fn add_archival<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
     Json(request): Json<AddArchivalRequest>,
 ) -> Result<Json<ArchivalEntry>, ApiError> {
-    // Verify agent exists
+    // Verify agent exists (using async method)
     state
-        .get_agent(&agent_id)?
+        .get_agent_async(&agent_id)
+        .await?
         .ok_or_else(|| ApiError::not_found("agent", &agent_id))?;
 
     // Validate content
@@ -98,27 +110,56 @@ pub async fn add_archival(
         return Err(ApiError::bad_request("Content too long (max 100KB)"));
     }
 
-    // Add to archival memory
-    let entry = state.add_archival(&agent_id, request.content, request.metadata)?;
+    // Single source of truth: Use AgentService
+    let service = state
+        .agent_service()
+        .ok_or_else(|| ApiError::internal("AgentService not configured"))?;
 
-    tracing::info!(agent_id = %agent_id, entry_id = %entry.id, "Added archival entry");
+    // Add to archival memory via AgentService
+    let entry_id = service
+        .archival_insert(&agent_id, &request.content, request.metadata.clone())
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to add archival entry: {}", e)))?;
+
+    // Create entry object for response
+    let entry = ArchivalEntry {
+        id: entry_id.clone(),
+        content: request.content,
+        metadata: request.metadata.clone(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    tracing::info!(agent_id = %agent_id, entry_id = %entry_id, "Added archival entry");
 
     Ok(Json(entry))
 }
 
 /// Get a specific archival entry
 #[instrument(skip(state), fields(agent_id = %agent_id, entry_id = %entry_id), level = "info")]
-pub async fn get_archival_entry(
-    State(state): State<AppState>,
+pub async fn get_archival_entry<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path((agent_id, entry_id)): Path<(String, String)>,
 ) -> Result<Json<ArchivalEntry>, ApiError> {
-    // Verify agent exists
+    // Verify agent exists (using async method)
     state
-        .get_agent(&agent_id)?
+        .get_agent_async(&agent_id)
+        .await?
         .ok_or_else(|| ApiError::not_found("agent", &agent_id))?;
 
-    let entry = state
-        .get_archival_entry(&agent_id, &entry_id)?
+    // Single source of truth: Use AgentService
+    let service = state
+        .agent_service()
+        .ok_or_else(|| ApiError::internal("AgentService not configured"))?;
+
+    // Search for the specific entry
+    let entries = service
+        .archival_search(&agent_id, "", 1000)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to search archival: {}", e)))?;
+
+    let entry = entries
+        .into_iter()
+        .find(|e| e.id == entry_id)
         .ok_or_else(|| ApiError::not_found("archival_entry", &entry_id))?;
 
     Ok(Json(entry))
@@ -126,16 +167,25 @@ pub async fn get_archival_entry(
 
 /// Delete an archival entry
 #[instrument(skip(state), fields(agent_id = %agent_id, entry_id = %entry_id), level = "info")]
-pub async fn delete_archival_entry(
-    State(state): State<AppState>,
+pub async fn delete_archival_entry<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path((agent_id, entry_id)): Path<(String, String)>,
 ) -> Result<(), ApiError> {
-    // Verify agent exists
+    // Verify agent exists (using async method)
     state
-        .get_agent(&agent_id)?
+        .get_agent_async(&agent_id)
+        .await?
         .ok_or_else(|| ApiError::not_found("agent", &agent_id))?;
 
-    state.delete_archival_entry(&agent_id, &entry_id)?;
+    // Single source of truth: Use AgentService
+    let service = state
+        .agent_service()
+        .ok_or_else(|| ApiError::internal("AgentService not configured"))?;
+
+    service
+        .archival_delete(&agent_id, &entry_id)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to delete archival entry: {}", e)))?;
 
     tracing::info!(agent_id = %agent_id, entry_id = %entry_id, "Deleted archival entry");
 
@@ -144,16 +194,85 @@ pub async fn delete_archival_entry(
 
 #[cfg(test)]
 mod tests {
-
+    use super::*;
     use crate::api;
+    use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
+    use kelpie_core::Runtime;
+    use kelpie_dst::{DeterministicRng, FaultInjector, SimStorage};
+    use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
+    use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
+    use kelpie_server::service::AgentService;
     use kelpie_server::state::AppState;
+    use kelpie_server::tools::UnifiedToolRegistry;
+    use std::sync::Arc;
     use tower::ServiceExt;
 
-    async fn test_app_with_agent() -> (Router, String) {
-        let state = AppState::new();
+    /// Mock LLM client for testing
+    struct MockLlmClient;
+
+    #[async_trait]
+    impl LlmClient for MockLlmClient {
+        async fn complete_with_tools(
+            &self,
+            _messages: Vec<LlmMessage>,
+            _tools: Vec<kelpie_server::llm::ToolDefinition>,
+        ) -> kelpie_core::Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: "Test response".to_string(),
+                tool_calls: vec![],
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stop_reason: "end_turn".to_string(),
+            })
+        }
+
+        async fn continue_with_tool_result(
+            &self,
+            _messages: Vec<LlmMessage>,
+            _tools: Vec<kelpie_server::llm::ToolDefinition>,
+            _assistant_blocks: Vec<kelpie_server::llm::ContentBlock>,
+            _tool_results: Vec<(String, String)>,
+        ) -> kelpie_core::Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: "Test response".to_string(),
+                tool_calls: vec![],
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stop_reason: "end_turn".to_string(),
+            })
+        }
+    }
+
+    async fn test_app_with_agent() -> (Router, String, AppState<kelpie_core::TokioRuntime>) {
+        // Create AppState with AgentService (single source of truth)
+        let llm: Arc<dyn LlmClient> = Arc::new(MockLlmClient);
+        let actor = AgentActor::new(llm, Arc::new(UnifiedToolRegistry::new()));
+        let factory = Arc::new(CloneFactory::new(actor));
+
+        let rng = DeterministicRng::new(42);
+        let faults = Arc::new(FaultInjector::new(rng.fork()));
+        let storage = SimStorage::new(rng.fork(), faults);
+        let kv = Arc::new(storage);
+
+        let runtime = kelpie_core::TokioRuntime;
+
+        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState, _>::new(
+            factory,
+            kv,
+            DispatcherConfig::default(),
+            runtime.clone(),
+        );
+        let handle = dispatcher.handle();
+
+        drop(runtime.spawn(async move {
+            dispatcher.run().await;
+        }));
+
+        let service = AgentService::new(handle.clone());
+        let state = AppState::with_agent_service(runtime, service, handle);
 
         // Create agent
         let body = serde_json::json!({
@@ -181,12 +300,13 @@ mod tests {
         let agent: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let agent_id = agent["id"].as_str().unwrap().to_string();
 
-        (api::router(state), agent_id)
+        // Return router, agent_id, AND state for verification
+        (app, agent_id, state)
     }
 
     #[tokio::test]
     async fn test_search_archival_empty() {
-        let (app, agent_id) = test_app_with_agent().await;
+        let (app, agent_id, _state) = test_app_with_agent().await;
 
         let response = app
             .oneshot(
@@ -204,7 +324,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_archival() {
-        let (app, agent_id) = test_app_with_agent().await;
+        let (app, agent_id, _state) = test_app_with_agent().await;
 
         let body = serde_json::json!({
             "content": "This is a test archival entry",
@@ -223,5 +343,18 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_archival_text_alias() {
+        // Test "text" field is accepted (Letta compatibility)
+        let json = r#"{"text": "test entry"}"#;
+        let parsed: AddArchivalRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.content, "test entry");
+
+        // Test "content" field still works
+        let json = r#"{"content": "test entry"}"#;
+        let parsed: AddArchivalRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.content, "test entry");
     }
 }

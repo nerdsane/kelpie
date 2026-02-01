@@ -14,9 +14,18 @@ use tokio::sync::RwLock;
 use umi_memory::dst::SimEnvironment;
 use umi_memory::{Entity, Memory, RecallOptions, RememberOptions};
 
-// TigerStyle: Explicit constants with units
-/// Maximum core memory block size in bytes
-pub const CORE_MEMORY_BLOCK_SIZE_BYTES_MAX: usize = 8 * 1024; // 8KB per block
+// TigerStyle: Explicit constants with units (configurable via env vars)
+/// Maximum core memory block size in bytes (configurable via KELPIE_core_memory_block_size_bytes_max())
+pub fn core_memory_block_size_bytes_max() -> usize {
+    use std::sync::OnceLock;
+    static VALUE: OnceLock<usize> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        std::env::var("KELPIE_core_memory_block_size_bytes_max()")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8 * 1024) // 8KB default
+    })
+}
 
 /// Maximum number of archival search results
 pub const ARCHIVAL_SEARCH_RESULTS_MAX: usize = 100;
@@ -182,12 +191,12 @@ impl UmiMemoryBackend {
             let new_value = format!("{}\n{}", block.value, content);
 
             // TigerStyle: Check size limit
-            if new_value.len() > CORE_MEMORY_BLOCK_SIZE_BYTES_MAX {
+            if new_value.len() > core_memory_block_size_bytes_max() {
                 return Err(anyhow!(
                     "core memory block '{}' would exceed max size ({} > {})",
                     label,
                     new_value.len(),
-                    CORE_MEMORY_BLOCK_SIZE_BYTES_MAX
+                    core_memory_block_size_bytes_max()
                 ));
             }
 
@@ -195,11 +204,11 @@ impl UmiMemoryBackend {
             block.size_bytes = block.value.len();
         } else {
             // Create new block
-            if content.len() > CORE_MEMORY_BLOCK_SIZE_BYTES_MAX {
+            if content.len() > core_memory_block_size_bytes_max() {
                 return Err(anyhow!(
                     "content exceeds max block size ({} > {})",
                     content.len(),
-                    CORE_MEMORY_BLOCK_SIZE_BYTES_MAX
+                    core_memory_block_size_bytes_max()
                 ));
             }
 
@@ -246,11 +255,11 @@ impl UmiMemoryBackend {
         let new_value = block.value.replace(old_content, new_content);
 
         // TigerStyle: Check size limit
-        if new_value.len() > CORE_MEMORY_BLOCK_SIZE_BYTES_MAX {
+        if new_value.len() > core_memory_block_size_bytes_max() {
             return Err(anyhow!(
                 "replacement would exceed max block size ({} > {})",
                 new_value.len(),
-                CORE_MEMORY_BLOCK_SIZE_BYTES_MAX
+                core_memory_block_size_bytes_max()
             ));
         }
 

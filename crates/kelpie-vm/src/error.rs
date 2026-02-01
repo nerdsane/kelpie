@@ -127,6 +127,21 @@ pub enum VmError {
     Internal { reason: String },
 }
 
+impl From<VmError> for kelpie_core::error::Error {
+    fn from(err: VmError) -> Self {
+        use kelpie_core::error::Error;
+        match err {
+            VmError::BootTimeout { timeout_ms } => Error::timeout("VM boot", timeout_ms),
+            VmError::ExecTimeout { timeout_ms } => Error::timeout("VM exec", timeout_ms),
+            VmError::ConfigInvalid { reason } | VmError::ConfigurationFailed { reason } => {
+                Error::config(reason)
+            }
+            VmError::RootDiskNotFound { path } => Error::not_found("root_disk", path),
+            _ => Error::internal(err.to_string()),
+        }
+    }
+}
+
 impl VmError {
     /// Check if this error is retriable
     pub fn is_retriable(&self) -> bool {

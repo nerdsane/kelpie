@@ -121,8 +121,42 @@ pub trait Actor: Send + Sync + 'static {
 
 **Rejected because**: Higher complexity, still need something to process events.
 
+## Formal Specification
+
+The single activation guarantee is formalized in [KelpieSingleActivation.tla](../tla/KelpieSingleActivation.tla).
+
+### Safety Invariants
+
+| Invariant | Description | TLA+ Definition |
+|-----------|-------------|-----------------|
+| SingleActivation | At most one active instance per actor ID in the cluster | `SingleActivation` |
+| PlacementConsistency | Registry placement matches actual activation location | `PlacementConsistency` |
+| LeaseValidityIfActive | Active actors have valid leases | `LeaseValidityIfActive` |
+
+### Bug Patterns
+
+The TLA+ spec includes buggy configurations that demonstrate how invariants can be violated:
+
+| Bug Pattern | Violation | DST Test |
+|-------------|-----------|----------|
+| TryClaimActor_Racy | TOCTOU race allows dual activation | `test_single_activation_with_network_partition` |
+| LeaseExpires_Racy | Zombie actor reclaim race | `test_single_activation_with_crash_recovery` |
+
+### TLC Verification
+
+- **Safe config**: All invariants hold (714 states, depth 27)
+- **Buggy config**: SingleActivation violated with racy claims
+
+### DST Coverage
+
+Tests verifying these invariants are in `crates/kelpie-dst/tests/single_activation_dst.rs`:
+- `test_concurrent_activation_single_winner` - Concurrent activations, exactly one wins
+- `test_single_activation_with_network_partition` - Invariant holds under network partition
+- `test_single_activation_with_crash_recovery` - Invariant holds after crash/recovery
+
 ## References
 
 - [Orleans: Distributed Virtual Actors](https://www.microsoft.com/en-us/research/publication/orleans-distributed-virtual-actors-for-programmability-and-scalability/)
 - [NOLA: Go Virtual Actors](https://github.com/richardartoul/nola)
 - [Virtual Actors Paper](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/Orleans-MSR-TR-2014-41.pdf)
+- [KelpieSingleActivation.tla](../tla/KelpieSingleActivation.tla)

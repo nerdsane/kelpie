@@ -15,6 +15,38 @@ pub struct LlmMessage {
     pub content: String,
 }
 
+// Manual implementation for serialization in AgentContinuation
+impl serde::Serialize for LlmMessage {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("LlmMessage", 2)?;
+        state.serialize_field("role", &self.role)?;
+        state.serialize_field("content", &self.content)?;
+        state.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for LlmMessage {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct LlmMessageHelper {
+            role: String,
+            content: String,
+        }
+        let helper = LlmMessageHelper::deserialize(deserializer)?;
+        Ok(LlmMessage {
+            role: helper.role,
+            content: helper.content,
+        })
+    }
+}
+
 /// Response from LLM completion
 #[derive(Debug, Clone)]
 pub struct LlmResponse {
@@ -251,9 +283,10 @@ impl LlmClient for RealLlmAdapter {
                 message: format!("LLM streaming failed: {}", e),
             })?;
 
-        // Convert StreamDelta to StreamChunk
-        let chunk_stream = stream.map(|delta_result| {
-            delta_result
+        // Convert StreamDelta to StreamChunk, tracking tool call ID across deltas
+        // Use scan to maintain state (current tool call ID) across stream items
+        let chunk_stream = stream.scan(String::new(), |current_tool_id, delta_result| {
+            let result = delta_result
                 .map_err(|e| kelpie_core::Error::Internal {
                     message: format!("Stream error: {}", e),
                 })
@@ -262,6 +295,8 @@ impl LlmClient for RealLlmAdapter {
                         StreamChunk::ContentDelta { delta: text }
                     }
                     crate::llm::StreamDelta::ToolCallStart { id, name } => {
+                        // Track the tool call ID for subsequent deltas
+                        *current_tool_id = id.clone();
                         StreamChunk::ToolCallStart {
                             id,
                             name,
@@ -269,15 +304,17 @@ impl LlmClient for RealLlmAdapter {
                         }
                     }
                     crate::llm::StreamDelta::ToolCallDelta { delta } => {
+                        // Use the tracked tool call ID
                         StreamChunk::ToolCallDelta {
-                            id: "".to_string(), // TODO: track tool call ID across deltas
+                            id: current_tool_id.clone(),
                             delta,
                         }
                     }
                     crate::llm::StreamDelta::Done { stop_reason } => {
                         StreamChunk::Done { stop_reason }
                     }
-                })
+                });
+            async move { Some(result) }
         });
 
         Ok(Box::pin(chunk_stream))

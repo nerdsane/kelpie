@@ -32,6 +32,7 @@
 //!     └───────────┘            └───────────┘
 //! ```
 
+use crate::runtime::Runtime;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -88,7 +89,9 @@ impl TimeProvider for WallClockTime {
     }
 
     async fn sleep_ms(&self, ms: u64) {
-        tokio::time::sleep(tokio::time::Duration::from_millis(ms)).await;
+        crate::current_runtime()
+            .sleep(std::time::Duration::from_millis(ms))
+            .await;
     }
 }
 

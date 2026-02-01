@@ -8,6 +8,7 @@
 use crate::api::ApiError;
 use axum::{extract::Path, extract::Query, routing::get, Router};
 use axum::{extract::State, Json};
+use kelpie_core::Runtime;
 use kelpie_server::models::{CreateJobRequest, Job, UpdateJobRequest};
 use kelpie_server::state::AppState;
 use serde::Deserialize;
@@ -18,7 +19,7 @@ const JOBS_PER_AGENT_MAX: usize = 100;
 const SCHEDULE_PATTERN_LENGTH_MAX: usize = 256;
 
 /// Create scheduling routes
-pub fn router() -> Router<AppState> {
+pub fn router<R: Runtime + 'static>() -> Router<AppState<R>> {
     Router::new()
         .route("/jobs", get(list_jobs).post(create_job))
         .route(
@@ -31,8 +32,8 @@ pub fn router() -> Router<AppState> {
 ///
 /// POST /v1/jobs
 #[instrument(skip(state, request), fields(agent_id = %request.agent_id, action = ?request.action), level = "info")]
-async fn create_job(
-    State(state): State<AppState>,
+async fn create_job<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Json(request): Json<CreateJobRequest>,
 ) -> Result<Json<Job>, ApiError> {
     // Validate agent exists
@@ -82,8 +83,8 @@ async fn create_job(
 ///
 /// GET /v1/jobs/{job_id}
 #[instrument(skip(state), fields(job_id = %job_id), level = "info")]
-async fn get_job(
-    State(state): State<AppState>,
+async fn get_job<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(job_id): Path<String>,
 ) -> Result<Json<Job>, ApiError> {
     let job = state
@@ -97,8 +98,8 @@ async fn get_job(
 ///
 /// GET /v1/jobs?agent_id={agent_id}
 #[instrument(skip(state, query), fields(agent_id = ?query.agent_id), level = "info")]
-async fn list_jobs(
-    State(state): State<AppState>,
+async fn list_jobs<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Query(query): Query<ListJobsQuery>,
 ) -> Result<Json<Vec<Job>>, ApiError> {
     let jobs = state.list_all_jobs(query.agent_id.as_deref())?;
@@ -117,8 +118,8 @@ struct ListJobsQuery {
 ///
 /// PATCH /v1/jobs/{job_id}
 #[instrument(skip(state, request), fields(job_id = %job_id), level = "info")]
-async fn update_job(
-    State(state): State<AppState>,
+async fn update_job<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(job_id): Path<String>,
     Json(request): Json<UpdateJobRequest>,
 ) -> Result<Json<Job>, ApiError> {
@@ -142,8 +143,8 @@ async fn update_job(
 ///
 /// DELETE /v1/jobs/{job_id}
 #[instrument(skip(state), fields(job_id = %job_id), level = "info")]
-async fn delete_job(
-    State(state): State<AppState>,
+async fn delete_job<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(job_id): Path<String>,
 ) -> Result<(), ApiError> {
     state.delete_job(&job_id)?;
@@ -157,15 +158,83 @@ async fn delete_job(
 mod tests {
     use super::*;
     use crate::api;
+    use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
+    use kelpie_core::Runtime;
+    use kelpie_dst::{DeterministicRng, FaultInjector, SimStorage};
+    use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
+    use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
     use kelpie_server::models::{AgentState, JobAction, JobStatus, ScheduleType};
+    use kelpie_server::service::AgentService;
+    use kelpie_server::tools::UnifiedToolRegistry;
+    use std::sync::Arc;
     use tower::ServiceExt;
 
-    /// Create test app
+    /// Mock LLM client for testing
+    struct MockLlmClient;
+
+    #[async_trait]
+    impl LlmClient for MockLlmClient {
+        async fn complete_with_tools(
+            &self,
+            _messages: Vec<LlmMessage>,
+            _tools: Vec<kelpie_server::llm::ToolDefinition>,
+        ) -> kelpie_core::Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: "Test response".to_string(),
+                tool_calls: vec![],
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stop_reason: "end_turn".to_string(),
+            })
+        }
+
+        async fn continue_with_tool_result(
+            &self,
+            _messages: Vec<LlmMessage>,
+            _tools: Vec<kelpie_server::llm::ToolDefinition>,
+            _assistant_blocks: Vec<kelpie_server::llm::ContentBlock>,
+            _tool_results: Vec<(String, String)>,
+        ) -> kelpie_core::Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: "Test response".to_string(),
+                tool_calls: vec![],
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                stop_reason: "end_turn".to_string(),
+            })
+        }
+    }
+
+    /// Create test app with AgentService (single source of truth)
     async fn test_app() -> Router {
-        let state = AppState::new();
+        let llm: Arc<dyn LlmClient> = Arc::new(MockLlmClient);
+        let actor = AgentActor::new(llm, Arc::new(UnifiedToolRegistry::new()));
+        let factory = Arc::new(CloneFactory::new(actor));
+
+        let rng = DeterministicRng::new(42);
+        let faults = Arc::new(FaultInjector::new(rng.fork()));
+        let storage = SimStorage::new(rng.fork(), faults);
+        let kv = Arc::new(storage);
+
+        let runtime = kelpie_core::TokioRuntime;
+
+        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState, _>::new(
+            factory,
+            kv,
+            DispatcherConfig::default(),
+            runtime.clone(),
+        );
+        let handle = dispatcher.handle();
+
+        drop(runtime.spawn(async move {
+            dispatcher.run().await;
+        }));
+
+        let service = AgentService::new(handle.clone());
+        let state = AppState::with_agent_service(runtime, service, handle);
         api::router(state)
     }
 
@@ -436,5 +505,159 @@ mod tests {
         let updated_job: Job = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(updated_job.status, JobStatus::Paused);
+    }
+
+    // ============================================================================
+    // Phase 5: Job Persistence Verification Tests
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_job_delete_removes_from_storage() {
+        let app = test_app().await;
+        let agent_id = create_test_agent(&app).await;
+
+        // Create job
+        let job_request = serde_json::json!({
+            "agent_id": agent_id,
+            "schedule_type": "interval",
+            "schedule": "3600",
+            "action": "summarize_conversation"
+        });
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/jobs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&job_request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let job: Job = serde_json::from_slice(&body).unwrap();
+        let job_id = job.id.clone();
+
+        // Verify job exists
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/jobs/{}", job_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Delete job
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/v1/jobs/{}", job_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify job is gone
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/jobs/{}", job_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_job_update_persists() {
+        let app = test_app().await;
+        let agent_id = create_test_agent(&app).await;
+
+        // Create job
+        let job_request = serde_json::json!({
+            "agent_id": agent_id,
+            "schedule_type": "interval",
+            "schedule": "3600",
+            "action": "summarize_conversation",
+            "description": "Original description"
+        });
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/jobs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&job_request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let job: Job = serde_json::from_slice(&body).unwrap();
+        let job_id = job.id.clone();
+
+        // Update job
+        let update_request = serde_json::json!({
+            "status": "paused",
+            "description": "Updated description"
+        });
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/v1/jobs/{}", job_id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&update_request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Read job back to verify update persisted
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/jobs/{}", job_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let fetched: Job = serde_json::from_slice(&body).unwrap();
+
+        // Verify updates persisted
+        assert_eq!(fetched.status, JobStatus::Paused);
+        assert_eq!(fetched.description.as_deref(), Some("Updated description"));
     }
 }

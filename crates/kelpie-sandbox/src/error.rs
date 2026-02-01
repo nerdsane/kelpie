@@ -135,8 +135,19 @@ impl From<std::io::Error> for SandboxError {
 
 impl From<SandboxError> for kelpie_core::error::Error {
     fn from(err: SandboxError) -> Self {
-        kelpie_core::error::Error::Internal {
-            message: err.to_string(),
+        use kelpie_core::error::Error;
+        match err {
+            SandboxError::NotFound { sandbox_id } => Error::not_found("sandbox", sandbox_id),
+            SandboxError::ExecTimeout {
+                command,
+                timeout_ms,
+            } => Error::timeout(format!("sandbox exec: {}", command), timeout_ms),
+            SandboxError::PoolAcquireTimeout { timeout_ms } => {
+                Error::timeout("sandbox pool acquire", timeout_ms)
+            }
+            SandboxError::ConfigError { reason } => Error::config(reason),
+            SandboxError::IoError { reason } => Error::internal(format!("IO error: {}", reason)),
+            _ => Error::internal(err.to_string()),
         }
     }
 }

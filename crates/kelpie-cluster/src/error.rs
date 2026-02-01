@@ -45,6 +45,22 @@ pub enum ClusterError {
     #[error("no available nodes for actor {actor_id}")]
     NoAvailableNodes { actor_id: String },
 
+    /// No quorum - insufficient nodes to form majority
+    ///
+    /// This error occurs during network partitions when this partition
+    /// cannot reach enough nodes to form a majority (strict > total/2).
+    #[error(
+        "no quorum: {available_nodes} of {total_nodes} nodes reachable (need > {total_nodes}/2)"
+    )]
+    NoQuorum {
+        /// Number of nodes reachable in this partition
+        available_nodes: usize,
+        /// Total cluster size
+        total_nodes: usize,
+        /// Operation that was attempted
+        operation: String,
+    },
+
     /// Registry error
     #[error("registry error: {0}")]
     Registry(#[from] RegistryError),
@@ -80,6 +96,34 @@ impl ClusterError {
         Self::RpcTimeout {
             node_id: node_id.to_string(),
             timeout_ms,
+        }
+    }
+
+    /// Create a no quorum error
+    pub fn no_quorum(
+        available_nodes: usize,
+        total_nodes: usize,
+        operation: impl Into<String>,
+    ) -> Self {
+        Self::NoQuorum {
+            available_nodes,
+            total_nodes,
+            operation: operation.into(),
+        }
+    }
+
+    /// Check if we have quorum (strict majority)
+    ///
+    /// Quorum requires > total/2 nodes (e.g., 3 of 5, 2 of 3).
+    pub fn check_quorum(
+        available: usize,
+        total: usize,
+        operation: impl Into<String>,
+    ) -> Result<(), Self> {
+        if available > total / 2 {
+            Ok(())
+        } else {
+            Err(Self::no_quorum(available, total, operation))
         }
     }
 

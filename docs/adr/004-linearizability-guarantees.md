@@ -193,8 +193,107 @@ Kelpie chooses **CP** (Consistency + Partition tolerance):
 
 **Rejected because**: Violates single activation guarantee.
 
+## Formal Specification
+
+Kelpie's linearizability guarantees are formally specified and model-checked using TLA+.
+
+### Related TLA+ Specifications
+
+| Specification | Purpose | Key Invariants |
+|---------------|---------|----------------|
+| [KelpieLease.tla](../tla/KelpieLease.tla) | Lease-based ownership | `LeaseUniqueness`, `RenewalRequiresOwnership` |
+| [KelpieSingleActivation.tla](../tla/KelpieSingleActivation.tla) | FDB OCC for single activation | `SingleActivation`, `ConsistentHolder` |
+| [KelpieClusterMembership.tla](../tla/KelpieClusterMembership.tla) | Split-brain prevention | `NoSplitBrain`, `MembershipConsistency` |
+
+### Safety Invariants
+
+| Invariant | Description | Spec |
+|-----------|-------------|------|
+| `SingleActivation` | At most one node holds the actor at any time | KelpieSingleActivation |
+| `LeaseUniqueness` | At most one node believes it holds a valid lease | KelpieLease |
+| `NoSplitBrain` | At most one valid primary in the cluster | KelpieClusterMembership |
+| `ConsistentHolder` | Active node matches FDB holder | KelpieSingleActivation |
+
+### Liveness Properties
+
+| Property | Description | Spec |
+|----------|-------------|------|
+| `EventualActivation` | Every claim eventually resolves | KelpieSingleActivation |
+| `EventualLeaseResolution` | Leases eventually granted or expire | KelpieLease |
+| `EventualMembershipConvergence` | Membership views eventually converge | KelpieClusterMembership |
+
+### Model Checking Results
+
+| Spec | Safe Config | Buggy Config |
+|------|-------------|--------------|
+| KelpieSingleActivation | PASS (714 states) | FAIL - `SingleActivation` violated |
+| KelpieLease | PASS (679 states) | FAIL - `LeaseUniqueness` violated |
+| KelpieClusterMembership | PASS | FAIL - `NoSplitBrain` violated |
+
+## Split-Brain Prevention
+
+Split-brain occurs when network partitions cause multiple nodes to believe they are the primary/owner. Kelpie prevents this through:
+
+### Quorum Requirements
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Quorum-Based Split-Brain Prevention               │
+│                                                                      │
+│  5-Node Cluster Partitions into 3+2:                                │
+│                                                                      │
+│  ┌─────────────┐         ┌─────────────┐                            │
+│  │  Partition A │         │ Partition B │                            │
+│  │  (3 nodes)   │    X    │  (2 nodes)  │                            │
+│  │  Has quorum  │         │  No quorum  │                            │
+│  │  (3 > 5/2)   │         │  (2 <= 5/2) │                            │
+│  └─────────────┘         └─────────────┘                            │
+│                                                                      │
+│  Only Partition A can:                                               │
+│  - Elect a primary                                                   │
+│  - Process write operations                                          │
+│  - Modify actor state                                                │
+│                                                                      │
+│  Partition B:                                                        │
+│  - Cannot elect primary (no quorum)                                  │
+│  - Existing primary steps down                                       │
+│  - Read-only or unavailable                                          │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Primary Election Mechanism
+
+1. **Term-Based Ordering**: Each primary election increments a term counter
+2. **Majority Required**: Must reach majority of TOTAL cluster size (not view size)
+3. **Step-Down on Quorum Loss**: Primary must step down if it loses majority
+4. **Conflict Resolution**: Higher term always wins when partitions heal
+
+### Partition Handling Policy
+
+| Scenario | Majority Partition | Minority Partition |
+|----------|-------------------|-------------------|
+| Primary Election | Can elect new primary | Cannot elect |
+| Write Operations | Allowed | Rejected |
+| Read Operations | Allowed | Depends on configuration |
+| Actor Activation | Allowed | Blocked |
+
+### FDB Transaction Integration
+
+FoundationDB's optimistic concurrency control (OCC) provides additional protection:
+
+1. **Version Checking**: Transactions read a snapshot version
+2. **Conflict Detection**: Commit fails if key modified since read
+3. **Atomic Updates**: Lease updates are atomic
+4. **Linearizable Reads**: FDB provides linearizable read/write operations
+
+See [KelpieSingleActivation.tla](../tla/KelpieSingleActivation.tla) for the formal model.
+
 ## References
 
 - [Linearizability: A Correctness Condition for Concurrent Objects](https://cs.brown.edu/~mph/HerlihyW90/p463-herlihy.pdf)
 - [Jepsen Testing](https://jepsen.io/)
 - [FoundationDB Consistency](https://apple.github.io/foundationdb/consistency.html)
+- [ADR-022: WAL Design](./022-wal-design.md) - Write-ahead log for durability
+- [ADR-023: Actor Registry Design](./023-actor-registry-design.md) - Actor placement
+- [ADR-025: Cluster Membership Protocol](./025-cluster-membership-protocol.md) - Membership and split-brain prevention

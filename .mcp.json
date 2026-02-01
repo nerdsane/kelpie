@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "kelpie": {
+      "command": "uv",
+      "args": ["run", "--directory", "./kelpie-mcp", "--prerelease=allow", "mcp-kelpie"],
+      "env": {
+        "KELPIE_CODEBASE_PATH": "..",
+        "KELPIE_SUB_LLM_MODEL": "claude-haiku-4-5-20251001"
+      }
+    }
+  }
+}

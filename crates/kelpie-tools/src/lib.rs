@@ -28,6 +28,8 @@
 
 mod builtin;
 mod error;
+pub mod http_client;
+pub mod http_tool;
 pub mod mcp;
 mod registry;
 #[cfg(feature = "dst")]
@@ -36,7 +38,16 @@ mod traits;
 
 pub use builtin::{FilesystemTool, GitTool, ShellTool};
 pub use error::{ToolError, ToolResult};
-pub use mcp::{McpClient, McpConfig, McpTool, McpToolDefinition};
+pub use http_client::{
+    default_http_client, HttpClient, HttpError, HttpRequest, HttpResponse, HttpResult,
+    ReqwestHttpClient, HTTP_CLIENT_RESPONSE_BYTES_MAX, HTTP_CLIENT_TIMEOUT_MS_DEFAULT,
+};
+pub use http_tool::{HttpMethod, HttpTool, HttpToolDefinition};
+pub use mcp::{
+    extract_tool_output, McpClient, McpConfig, McpTool, McpToolDefinition, ReconnectConfig,
+    MCP_HEALTH_CHECK_INTERVAL_MS, MCP_RECONNECT_ATTEMPTS_MAX, MCP_RECONNECT_BACKOFF_MULTIPLIER,
+    MCP_RECONNECT_DELAY_MS_INITIAL, MCP_RECONNECT_DELAY_MS_MAX, MCP_SSE_SHUTDOWN_TIMEOUT_MS,
+};
 pub use registry::ToolRegistry;
 #[cfg(feature = "dst")]
 pub use sim::{

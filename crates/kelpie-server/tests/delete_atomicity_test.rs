@@ -54,6 +54,8 @@ async fn test_delete_crash_between_clear_and_deactivate() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 };
 
                 // Create agent
@@ -153,6 +155,8 @@ async fn test_delete_then_recreate() {
                     tags: vec!["v1".to_string()],
                     metadata: serde_json::json!({"version": 1}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 };
 
                 // Create agent v1
@@ -201,6 +205,8 @@ async fn test_delete_then_recreate() {
                     tags: vec!["v2".to_string()],
                     metadata: serde_json::json!({"version": 2}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 };
 
                 let agent_v2 = match service.create_agent(request_v2).await {
@@ -341,7 +347,8 @@ impl LlmClient for SimLlmClientAdapter {
     }
 }
 
-fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
+fn create_service(sim_env: &SimEnvironment) -> Result<AgentService<kelpie_core::CurrentRuntime>> {
+    use kelpie_core::Runtime;
     let sim_llm = SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone());
     let llm_adapter: Arc<dyn LlmClient> = Arc::new(SimLlmClientAdapter {
         client: Arc::new(sim_llm),
@@ -350,9 +357,14 @@ fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
     let factory = Arc::new(CloneFactory::new(actor));
     let kv = Arc::new(sim_env.storage.clone());
     let mut dispatcher =
-        Dispatcher::<AgentActor, AgentActorState>::new(factory, kv, DispatcherConfig::default());
+        Dispatcher::<AgentActor, AgentActorState, kelpie_core::CurrentRuntime>::new(
+            factory,
+            kv,
+            DispatcherConfig::default(),
+            kelpie_core::current_runtime(),
+        );
     let handle = dispatcher.handle();
-    tokio::spawn(async move {
+    let _dispatcher_handle = kelpie_core::current_runtime().spawn(async move {
         dispatcher.run().await;
     });
     Ok(AgentService::new(handle))

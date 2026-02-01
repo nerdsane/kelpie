@@ -6,13 +6,18 @@
 
 use anyhow::{Context, Result};
 use std::process::Stdio;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixListener;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::Command;
 use tracing::{error, info, warn};
 
+#[cfg(feature = "vsock")]
+use tokio_vsock::{VsockAddr, VsockListener, VMADDR_CID_ANY};
+
+#[cfg(not(feature = "vsock"))]
+use tokio::net::UnixListener;
+
 mod protocol;
-use protocol::{Request, Response, ExecOutput};
+use protocol::{ExecOutput, Request, Response};
 
 /// Default vsock port for guest agent
 /// TigerStyle: Explicit constant with unit in name
@@ -38,34 +43,83 @@ async fn main() -> Result<()> {
         "Guest agent version"
     );
 
-    // In real implementation, we'd use vsock:
-    // let listener = VsockListener::bind(VSOCK_CID_ANY, VSOCK_PORT_DEFAULT)?;
-    //
-    // For now, use Unix socket for development/testing
-    let socket_path = std::env::var("KELPIE_GUEST_SOCKET")
-        .unwrap_or_else(|_| "/tmp/kelpie-guest.sock".to_string());
+    #[cfg(feature = "vsock")]
+    {
+        // Use vsock for VM communication
+        // Guest connects to host via vsock (libkrun tunnels to Unix socket on host)
+        let port = std::env::var("KELPIE_GUEST_VSOCK_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(VSOCK_PORT_DEFAULT);
 
-    // Remove existing socket if present
-    let _ = std::fs::remove_file(&socket_path);
+        // CID 2 is the host in vsock
+        const VMADDR_CID_HOST: u32 = 2;
 
-    let listener = UnixListener::bind(&socket_path)
-        .context("Failed to bind Unix socket")?;
+        info!(port = port, cid = VMADDR_CID_HOST, "Connecting to host via vsock");
 
-    info!(socket = %socket_path, "Listening for connections");
+        // Retry connection until successful (host may not be ready immediately)
+        let max_retries = 30;
+        let mut stream = None;
 
-    // Accept connections in a loop
-    loop {
-        match listener.accept().await {
-            Ok((stream, _addr)) => {
-                info!("Accepted connection");
-                tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream).await {
-                        error!(error = %e, "Connection handler error");
+        for attempt in 1..=max_retries {
+            let addr = VsockAddr::new(VMADDR_CID_HOST, port);
+            match tokio_vsock::VsockStream::connect(addr).await {
+                Ok(s) => {
+                    info!(attempt = attempt, "Connected to host via vsock");
+                    stream = Some(s);
+                    break;
+                }
+                Err(e) => {
+                    if attempt < max_retries {
+                        info!(attempt = attempt, error = %e, "Vsock connect retry");
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    } else {
+                        error!(error = %e, "Failed to connect to host via vsock after {} attempts", max_retries);
+                        return Err(e.into());
                     }
-                });
+                }
             }
-            Err(e) => {
-                error!(error = %e, "Accept error");
+        }
+
+        let stream = stream.context("Failed to connect to vsock")?;
+        info!("Connected to host, handling commands");
+
+        // Handle the single connection to the host
+        if let Err(e) = handle_connection(stream).await {
+            error!(error = %e, "Connection handler error");
+        }
+
+        info!("Host disconnected, shutting down");
+        Ok(())
+    }
+
+    #[cfg(not(feature = "vsock"))]
+    {
+        // Fallback to Unix socket for development/testing
+        let socket_path = std::env::var("KELPIE_GUEST_SOCKET")
+            .unwrap_or_else(|_| "/tmp/kelpie-guest.sock".to_string());
+
+        // Remove existing socket if present
+        let _ = std::fs::remove_file(&socket_path);
+
+        let listener = UnixListener::bind(&socket_path).context("Failed to bind Unix socket")?;
+
+        info!(socket = %socket_path, "Listening for Unix socket connections");
+
+        // Accept connections in a loop
+        loop {
+            match listener.accept().await {
+                Ok((stream, _addr)) => {
+                    info!("Accepted connection");
+                    tokio::spawn(async move {
+                        if let Err(e) = handle_connection(stream).await {
+                            error!(error = %e, "Connection handler error");
+                        }
+                    });
+                }
+                Err(e) => {
+                    error!(error = %e, "Accept error");
+                }
             }
         }
     }
@@ -74,7 +128,10 @@ async fn main() -> Result<()> {
 /// Handle a single connection
 ///
 /// TigerStyle: Clear error propagation, explicit timeouts
-async fn handle_connection(mut stream: tokio::net::UnixStream) -> Result<()> {
+async fn handle_connection<S>(mut stream: S) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     info!("Handling connection");
 
     loop {
@@ -288,7 +345,10 @@ async fn list_directory(path: &str) -> Response {
 /// Send a response
 ///
 /// TigerStyle: Length-prefixed protocol, explicit error handling
-async fn send_response(stream: &mut tokio::net::UnixStream, response: &Response) -> Result<()> {
+async fn send_response<S>(stream: &mut S, response: &Response) -> Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
     let response_bytes = serde_json::to_vec(response)?;
     let response_len = response_bytes.len() as u32;
 

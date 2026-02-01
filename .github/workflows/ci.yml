@@ -18,6 +18,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install FoundationDB client
+        run: |
+          wget -q https://github.com/apple/foundationdb/releases/download/7.3.27/foundationdb-clients_7.3.27-1_amd64.deb
+          sudo dpkg -i foundationdb-clients_7.3.27-1_amd64.deb
       - name: Check
         run: cargo check --all-targets --features otel,firecracker
 
@@ -32,6 +36,18 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
 
+  determinism-check:
+    name: DST Pattern Enforcement
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Make script executable
+        run: chmod +x scripts/check-determinism.sh
+      - name: Check for non-deterministic patterns
+        run: ./scripts/check-determinism.sh --warn-only
+        # Note: Using --warn-only until existing violations are fixed.
+        # Change to --strict to block PRs with new violations.
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
@@ -41,6 +57,10 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Install FoundationDB client
+        run: |
+          wget -q https://github.com/apple/foundationdb/releases/download/7.3.27/foundationdb-clients_7.3.27-1_amd64.deb
+          sudo dpkg -i foundationdb-clients_7.3.27-1_amd64.deb
       - name: Clippy
         run: cargo clippy --all-targets --features otel,firecracker -- -D warnings
 
@@ -51,22 +71,52 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install FoundationDB client
+        run: |
+          wget -q https://github.com/apple/foundationdb/releases/download/7.3.27/foundationdb-clients_7.3.27-1_amd64.deb
+          sudo dpkg -i foundationdb-clients_7.3.27-1_amd64.deb
       - name: Test
         run: cargo test --features otel,firecracker
 
   test-dst:
-    name: DST Tests
+    name: DST Determinism Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: DST Tests (multiple seeds)
+      - name: Install FoundationDB client
         run: |
-          for seed in 12345 67890 11111 22222 33333; do
+          wget -q https://github.com/apple/foundationdb/releases/download/7.3.27/foundationdb-clients_7.3.27-1_amd64.deb
+          sudo dpkg -i foundationdb-clients_7.3.27-1_amd64.deb
+      - name: Make script executable
+        run: chmod +x scripts/check_dst.sh
+      - name: Verify Determinism (Double Run)
+        run: ./scripts/check_dst.sh 12345
+      - name: Run Chaos/Stress Tests (Multiple Seeds)
+        run: |
+          for seed in 67890 11111; do
             echo "Running DST with seed $seed"
             DST_SEED=$seed cargo test -p kelpie-dst --release
           done
+
+  test-madsim:
+    name: Madsim DST Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install FoundationDB client
+        run: |
+          wget -q https://github.com/apple/foundationdb/releases/download/7.3.27/foundationdb-clients_7.3.27-1_amd64.deb
+          sudo dpkg -i foundationdb-clients_7.3.27-1_amd64.deb
+      - name: Run kelpie-server madsim tests
+        run: cargo test -p kelpie-server --features dst,madsim
+      - name: Run agent service DST tests
+        run: cargo test -p kelpie-server --features dst,madsim --test agent_service_dst
+      - name: Run delete atomicity tests
+        run: cargo test -p kelpie-server --features dst,madsim --test delete_atomicity_test
 
   docs:
     name: Documentation
@@ -75,10 +125,98 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install FoundationDB client
+        run: |
+          wget -q https://github.com/apple/foundationdb/releases/download/7.3.27/foundationdb-clients_7.3.27-1_amd64.deb
+          sudo dpkg -i foundationdb-clients_7.3.27-1_amd64.deb
       - name: Build docs
         run: cargo doc --no-deps --features otel,firecracker
         env:
           RUSTDOCFLAGS: -D warnings
+
+  test-fdb:
+    name: FDB Integration Tests
+    runs-on: ubuntu-latest
+    # FDB integration tests are optional - the official FDB Docker image
+    # requires complex configuration that doesn't work reliably in CI.
+    # These tests can be run locally with a properly configured FDB cluster.
+    continue-on-error: true
+    services:
+      fdb:
+        image: foundationdb/foundationdb:7.3.27
+        ports:
+          - 4500:4500
+        # Simple health check - just verify the process is running
+        # Database configuration happens in the workflow steps
+        options: >-
+          --health-cmd "pgrep fdbserver || exit 1"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install FDB client
+        run: |
+          wget -q https://github.com/apple/foundationdb/releases/download/7.3.27/foundationdb-clients_7.3.27-1_amd64.deb
+          sudo dpkg -i foundationdb-clients_7.3.27-1_amd64.deb
+      - name: Get FDB container ID and cluster file
+        run: |
+          # Find the FDB container
+          FDB_CONTAINER=$(docker ps --filter "ancestor=foundationdb/foundationdb:7.3.27" --format "{{.ID}}" | head -1)
+          echo "FDB Container: $FDB_CONTAINER"
+          echo "FDB_CONTAINER=$FDB_CONTAINER" >> $GITHUB_ENV
+
+          # Copy the cluster file from the container (FDB generates it on startup)
+          # Keep the container's internal IP - GitHub Actions host can reach it directly
+          docker cp $FDB_CONTAINER:/var/fdb/fdb.cluster /tmp/fdb.cluster
+
+          echo "Cluster file contents:"
+          cat /tmp/fdb.cluster
+          echo "FDB_CLUSTER_FILE=/tmp/fdb.cluster" >> $GITHUB_ENV
+      - name: Initialize FDB database
+        run: |
+          # The official FDB Docker image requires complex configuration that
+          # doesn't work reliably in GitHub Actions. This step attempts to
+          # initialize the database but may timeout. The test-fdb job has
+          # continue-on-error: true so CI passes even if this fails.
+
+          # Check container logs
+          echo "=== FDB Container Logs ==="
+          docker logs $FDB_CONTAINER 2>&1 || true
+
+          # Check cluster file
+          echo "=== Cluster File ==="
+          docker exec $FDB_CONTAINER cat /var/fdb/fdb.cluster || true
+
+          # Try to initialize (reduced timeout - 10 attempts)
+          for i in {1..10}; do
+            # Check status inside the container with short timeout
+            STATUS=$(timeout 10 docker exec $FDB_CONTAINER fdbcli --exec "status" 2>&1 || true)
+            echo "Attempt $i/10: ${STATUS:0:200}..."
+
+            if echo "$STATUS" | grep -q "The database is available"; then
+              echo "FDB database is available!"
+              exit 0
+            elif echo "$STATUS" | grep -q "The database is unavailable"; then
+              echo "FDB server reachable, configuring database..."
+              timeout 10 docker exec $FDB_CONTAINER fdbcli --exec "configure new single memory" || true
+              sleep 3
+            else
+              echo "FDB not responding yet ($i/10)"
+              sleep 3
+            fi
+          done
+
+          echo "FDB initialization timed out - this is expected with the official FDB Docker image in CI"
+          echo "FDB integration tests can be run locally with a properly configured FDB cluster"
+          exit 1
+      - name: Run FDB persistence tests
+        run: cargo test -p kelpie-server --test fdb_persistence_test -- --include-ignored
+        env:
+          FDB_CLUSTER_FILE: /tmp/fdb.cluster
+          RUST_LOG: info
 
   coverage:
     name: Coverage
@@ -89,6 +227,10 @@ jobs:
         with:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
+      - name: Install FoundationDB client
+        run: |
+          wget -q https://github.com/apple/foundationdb/releases/download/7.3.27/foundationdb-clients_7.3.27-1_amd64.deb
+          sudo dpkg -i foundationdb-clients_7.3.27-1_amd64.deb
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Generate coverage

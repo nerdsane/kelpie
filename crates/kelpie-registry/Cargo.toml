@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+default = []
+fdb = ["dep:foundationdb"]
+
 [dependencies]
 kelpie-core = { workspace = true }
 kelpie-storage = { workspace = true }
@@ -21,6 +25,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 rand = { workspace = true }
 hostname = { workspace = true }
+foundationdb = { workspace = true, optional = true }
 
 [dev-dependencies]
 kelpie-dst = { workspace = true }

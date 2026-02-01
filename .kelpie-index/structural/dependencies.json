@@ -1,0 +1,315 @@
+{
+  "version": "1.0.0",
+  "description": "Crate dependency graph from cargo metadata",
+  "built_at": "2026-01-21T15:18:54.950561+00:00",
+  "git_sha": "2d51005c978ef943a97e87de4b24df57e435457a",
+  "nodes": [
+    {
+      "id": "kelpie-core",
+      "type": "crate",
+      "crate_name": "kelpie-core"
+    },
+    {
+      "id": "kelpie-runtime",
+      "type": "crate",
+      "crate_name": "kelpie-runtime"
+    },
+    {
+      "id": "kelpie-storage",
+      "type": "crate",
+      "crate_name": "kelpie-storage"
+    },
+    {
+      "id": "kelpie-dst",
+      "type": "crate",
+      "crate_name": "kelpie-dst"
+    },
+    {
+      "id": "kelpie-sandbox",
+      "type": "crate",
+      "crate_name": "kelpie-sandbox"
+    },
+    {
+      "id": "kelpie-vm",
+      "type": "crate",
+      "crate_name": "kelpie-vm"
+    },
+    {
+      "id": "kelpie-cluster",
+      "type": "crate",
+      "crate_name": "kelpie-cluster"
+    },
+    {
+      "id": "kelpie-registry",
+      "type": "crate",
+      "crate_name": "kelpie-registry"
+    },
+    {
+      "id": "kelpie-memory",
+      "type": "crate",
+      "crate_name": "kelpie-memory"
+    },
+    {
+      "id": "kelpie-tools",
+      "type": "crate",
+      "crate_name": "kelpie-tools"
+    },
+    {
+      "id": "kelpie-wasm",
+      "type": "crate",
+      "crate_name": "kelpie-wasm"
+    },
+    {
+      "id": "kelpie-agent",
+      "type": "crate",
+      "crate_name": "kelpie-agent"
+    },
+    {
+      "id": "kelpie-server",
+      "type": "crate",
+      "crate_name": "kelpie-server"
+    },
+    {
+      "id": "kelpie-cli",
+      "type": "crate",
+      "crate_name": "kelpie-cli"
+    },
+    {
+      "id": "kelpie-indexer",
+      "type": "crate",
+      "crate_name": "kelpie-indexer"
+    }
+  ],
+  "edges": [
+    {
+      "from": "kelpie-runtime",
+      "to": "kelpie-core",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-runtime",
+      "to": "kelpie-storage",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-runtime",
+      "to": "kelpie-dst",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-storage",
+      "to": "kelpie-core",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-storage",
+      "to": "kelpie-dst",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-dst",
+      "to": "kelpie-core",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-dst",
+      "to": "kelpie-sandbox",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-dst",
+      "to": "kelpie-storage",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-dst",
+      "to": "kelpie-vm",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-dst",
+      "to": "kelpie-cluster",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-dst",
+      "to": "kelpie-memory",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-dst",
+      "to": "kelpie-registry",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-dst",
+      "to": "kelpie-runtime",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-dst",
+      "to": "kelpie-sandbox",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-dst",
+      "to": "kelpie-tools",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-sandbox",
+      "to": "kelpie-core",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-vm",
+      "to": "kelpie-core",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-vm",
+      "to": "kelpie-sandbox",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-cluster",
+      "to": "kelpie-core",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-cluster",
+      "to": "kelpie-registry",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-cluster",
+      "to": "kelpie-runtime",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-cluster",
+      "to": "kelpie-dst",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-registry",
+      "to": "kelpie-core",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-registry",
+      "to": "kelpie-storage",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-registry",
+      "to": "kelpie-dst",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-memory",
+      "to": "kelpie-core",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-memory",
+      "to": "kelpie-storage",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-tools",
+      "to": "kelpie-core",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-tools",
+      "to": "kelpie-dst",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-tools",
+      "to": "kelpie-sandbox",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-wasm",
+      "to": "kelpie-core",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-wasm",
+      "to": "kelpie-runtime",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-wasm",
+      "to": "kelpie-dst",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-agent",
+      "to": "kelpie-core",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-agent",
+      "to": "kelpie-runtime",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-agent",
+      "to": "kelpie-dst",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-server",
+      "to": "kelpie-core",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-server",
+      "to": "kelpie-dst",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-server",
+      "to": "kelpie-runtime",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-server",
+      "to": "kelpie-sandbox",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-server",
+      "to": "kelpie-storage",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-server",
+      "to": "kelpie-tools",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-server",
+      "to": "kelpie-vm",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-server",
+      "to": "kelpie-dst",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-server",
+      "to": "kelpie-tools",
+      "type": "depends"
+    },
+    {
+      "from": "kelpie-cli",
+      "to": "kelpie-core",
+      "type": "depends"
+    }
+  ]
+}

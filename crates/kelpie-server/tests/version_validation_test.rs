@@ -5,9 +5,16 @@
 use bytes::Bytes;
 use kelpie_core::{Error, Result};
 use kelpie_server::service::TeleportService;
-use kelpie_server::storage::{LocalTeleportStorage, SnapshotKind, TeleportStorage};
+use kelpie_server::storage::{KvAdapter, LocalTeleportStorage, SnapshotKind, TeleportStorage};
+use kelpie_storage::MemoryKV;
 use kelpie_vm::{MockVmFactory, VmConfig, VmInstance};
 use std::sync::Arc;
+
+/// Helper to create a mock agent storage
+#[allow(dead_code)]
+fn mock_agent_storage() -> Arc<KvAdapter> {
+    Arc::new(KvAdapter::new(Arc::new(MemoryKV::new())))
+}
 
 fn test_config() -> VmConfig {
     VmConfig::builder()

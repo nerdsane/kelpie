@@ -34,6 +34,7 @@
 //! pool.release(sandbox).await;
 //! ```
 
+mod agent_manager;
 mod config;
 mod error;
 mod exec;
@@ -47,6 +48,9 @@ mod traits;
 #[cfg(feature = "firecracker")]
 mod firecracker;
 
+pub use agent_manager::{
+    AgentSandboxManager, IsolationMode, AGENT_POOL_ACQUIRE_TIMEOUT_MS_DEFAULT,
+};
 pub use config::{ResourceLimits, SandboxConfig};
 pub use error::{SandboxError, SandboxResult};
 pub use exec::{ExecOptions, ExecOutput, ExitStatus};

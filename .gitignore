@@ -29,3 +29,22 @@ __pycache__/
 dist/
 build/
 .letta
+
+# Repo OS / Index System
+.agentfs/                      # Ephemeral agent state (SQLite DB, audit logs)
+.kelpie-index/semantic/        # LLM-generated summaries (may vary, not source of truth)
+**/build_progress.json
+
+# Test fixtures - generated indexes
+tools/kelpie-indexer/tests/fixtures/**/.kelpie-index/
+
+venv/
+.venv/
+states/
+
+# Git worktrees
+.worktrees/
+
+# Letta SDK test artifacts
+letta-repo/
+*.log

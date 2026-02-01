@@ -4,7 +4,7 @@
 #![cfg(feature = "dst")]
 
 use async_trait::async_trait;
-use kelpie_core::Result;
+use kelpie_core::{Result, Runtime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -19,14 +19,15 @@ use std::sync::Arc;
 /// - Service wraps dispatcher
 /// - create_agent() → AgentActor activated
 /// - Returns AgentState with ID
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_service_create_agent() {
     let config = SimConfig::new(1001);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
             // Create service with dispatcher
-            let service = create_service(&sim_env)?;
+            let service = create_service(kelpie_core::current_runtime(), &sim_env)?;
 
             // Create agent via service
             let request = CreateAgentRequest {
@@ -47,6 +48,8 @@ async fn test_dst_service_create_agent() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
 
             let agent_state = service.create_agent(request).await?;
@@ -75,13 +78,14 @@ async fn test_dst_service_create_agent() {
 /// - send_message() → routes to AgentActor handle_message
 /// - Returns LLM response
 /// - Message history updated
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_service_send_message() {
     let config = SimConfig::new(1002);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            let service = create_service(kelpie_core::current_runtime(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -97,6 +101,8 @@ async fn test_dst_service_send_message() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -132,13 +138,14 @@ async fn test_dst_service_send_message() {
 /// Contract:
 /// - get_agent() → returns current AgentState
 /// - Includes all metadata and blocks
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_service_get_agent() {
     let config = SimConfig::new(1003);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            let service = create_service(kelpie_core::current_runtime(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -154,6 +161,8 @@ async fn test_dst_service_get_agent() {
                 tags: vec!["test".to_string()],
                 metadata: serde_json::json!({"key": "value"}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let created = service.create_agent(request).await?;
 
@@ -185,13 +194,14 @@ async fn test_dst_service_get_agent() {
 /// - update_agent() → updates AgentActor state
 /// - Returns updated AgentState
 /// - Changes persisted
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_service_update_agent() {
     let config = SimConfig::new(1004);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            let service = create_service(kelpie_core::current_runtime(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -207,6 +217,8 @@ async fn test_dst_service_update_agent() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -242,13 +254,14 @@ async fn test_dst_service_update_agent() {
 /// Contract:
 /// - delete_agent() → deactivates AgentActor
 /// - Subsequent get_agent() fails with NotFound
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_service_delete_agent() {
     let config = SimConfig::new(1005);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            let service = create_service(kelpie_core::current_runtime(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -264,6 +277,8 @@ async fn test_dst_service_delete_agent() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -302,14 +317,15 @@ async fn test_dst_service_delete_agent() {
 /// - Storage failures → proper error propagation
 /// - Service doesn't panic or corrupt state
 /// - Errors are informative
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_service_dispatcher_failure() {
     let config = SimConfig::new(1006);
 
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.3))
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            let service = create_service(kelpie_core::current_runtime(), &sim_env)?;
 
             let mut success_count = 0;
             let mut failure_count = 0;
@@ -329,6 +345,8 @@ async fn test_dst_service_dispatcher_failure() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 };
 
                 match service.create_agent(request).await {
@@ -465,7 +483,10 @@ impl LlmClient for SimLlmClientAdapter {
 }
 
 /// Create AgentService from simulation environment
-fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
+fn create_service<R: Runtime + 'static>(
+    runtime: R,
+    sim_env: &SimEnvironment,
+) -> Result<AgentService<R>> {
     // Create SimLlmClient from environment
     let sim_llm = SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone());
 
@@ -484,13 +505,17 @@ fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
     let kv = Arc::new(sim_env.storage.clone());
 
     // Create dispatcher
-    let mut dispatcher =
-        Dispatcher::<AgentActor, AgentActorState>::new(factory, kv, DispatcherConfig::default());
+    let mut dispatcher = Dispatcher::<AgentActor, AgentActorState, _>::new(
+        factory,
+        kv,
+        DispatcherConfig::default(),
+        runtime.clone(),
+    );
 
     let handle = dispatcher.handle();
 
     // Spawn dispatcher task
-    tokio::spawn(async move {
+    let _dispatcher_handle = runtime.spawn(async move {
         dispatcher.run().await;
     });
 

@@ -14,7 +14,7 @@
 
 use async_trait::async_trait;
 use futures::stream::StreamExt;
-use kelpie_core::Result;
+use kelpie_core::{Result, Runtime};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, SimEnvironment, SimLlmClient, Simulation};
 use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
 use kelpie_server::actor::{
@@ -69,7 +69,10 @@ impl LlmClient for SimLlmClientAdapter {
 }
 
 /// Create AgentService from simulation environment
-fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
+fn create_service<R: Runtime + 'static>(
+    runtime: R,
+    sim_env: &SimEnvironment,
+) -> Result<AgentService<R>> {
     let sim_llm = SimLlmClient::new(sim_env.fork_rng_raw(), sim_env.faults.clone());
     let llm_adapter: Arc<dyn LlmClient> = Arc::new(SimLlmClientAdapter {
         client: Arc::new(sim_llm),
@@ -79,11 +82,15 @@ fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
     let factory = Arc::new(CloneFactory::new(actor));
     let kv = Arc::new(sim_env.storage.clone());
 
-    let mut dispatcher =
-        Dispatcher::<AgentActor, AgentActorState>::new(factory, kv, DispatcherConfig::default());
+    let mut dispatcher = Dispatcher::<AgentActor, AgentActorState, _>::new(
+        factory,
+        kv,
+        DispatcherConfig::default(),
+        runtime.clone(),
+    );
     let handle = dispatcher.handle();
 
-    tokio::spawn(async move {
+    let _dispatcher_handle = runtime.spawn(async move {
         dispatcher.run().await;
     });
 
@@ -96,13 +103,15 @@ fn create_service(sim_env: &SimEnvironment) -> Result<AgentService> {
 /// - Tokens arrive incrementally (not all at once)
 /// - Concatenated chunks equal final content
 /// - Stream ends with Done chunk
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_token_streaming_basic() {
     let config = SimConfig::new(5001);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            use kelpie_core::current_runtime;
+            let service = create_service(current_runtime(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -118,6 +127,8 @@ async fn test_dst_llm_token_streaming_basic() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -175,7 +186,8 @@ async fn test_dst_llm_token_streaming_basic() {
 /// - Stream completes despite StorageLatency faults
 /// - No tokens lost
 /// - Final content is complete
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_streaming_with_network_delay() {
     let config = SimConfig::new(5002);
 
@@ -188,7 +200,8 @@ async fn test_dst_llm_streaming_with_network_delay() {
             0.5, // 50% of operations delayed
         ))
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            use kelpie_core::current_runtime;
+            let service = create_service(current_runtime(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -204,6 +217,8 @@ async fn test_dst_llm_streaming_with_network_delay() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -245,13 +260,15 @@ async fn test_dst_llm_streaming_with_network_delay() {
 /// - Dropping stream consumer stops iteration
 /// - No panic or resource leak
 /// - Clean shutdown
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_streaming_cancellation() {
     let config = SimConfig::new(5003);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            use kelpie_core::current_runtime;
+            let service = create_service(current_runtime(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -267,6 +284,8 @@ async fn test_dst_llm_streaming_cancellation() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -305,13 +324,15 @@ async fn test_dst_llm_streaming_cancellation() {
 /// - Tool calls appear as ToolCallStart chunks
 /// - Content deltas continue after tool execution
 /// - Stream completes with Done
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_streaming_with_tool_calls() {
     let config = SimConfig::new(5004);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            use kelpie_core::current_runtime;
+            let service = create_service(current_runtime(), &sim_env)?;
 
             // Create agent with tool
             let request = CreateAgentRequest {
@@ -327,6 +348,8 @@ async fn test_dst_llm_streaming_with_tool_calls() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 
@@ -376,13 +399,16 @@ async fn test_dst_llm_streaming_with_tool_calls() {
 /// - Multiple agents can stream concurrently
 /// - Streams don't interfere with each other
 /// - All streams complete successfully
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_streaming_concurrent() {
     let config = SimConfig::new(5005);
 
     let result = Simulation::new(config)
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            use kelpie_core::current_runtime;
+            let runtime = current_runtime();
+            let service = create_service(runtime.clone(), &sim_env)?;
 
             // Create 3 agents
             let mut agent_ids = Vec::new();
@@ -400,6 +426,8 @@ async fn test_dst_llm_streaming_concurrent() {
                     tags: vec![],
                     metadata: serde_json::json!({}),
                     project_id: None,
+                    user_id: None,
+                    org_id: None,
                 };
                 let agent = service.create_agent(request).await?;
                 agent_ids.push(agent.id);
@@ -410,7 +438,7 @@ async fn test_dst_llm_streaming_concurrent() {
             for (idx, agent_id) in agent_ids.iter().enumerate() {
                 let service_clone = service.clone();
                 let agent_id_clone = agent_id.clone();
-                let handle = tokio::spawn(async move {
+                let handle = runtime.spawn(async move {
                     let mut stream = service_clone
                         .stream_message(&agent_id_clone, format!("Message {}", idx + 1))
                         .await?;
@@ -458,7 +486,8 @@ async fn test_dst_llm_streaming_concurrent() {
 /// - Stream works despite multiple simultaneous faults
 /// - No data corruption
 /// - Graceful degradation
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_streaming_with_comprehensive_faults() {
     let config = SimConfig::new(5006);
 
@@ -478,7 +507,8 @@ async fn test_dst_llm_streaming_with_comprehensive_faults() {
             0.3,
         ))
         .run_async(|sim_env| async move {
-            let service = create_service(&sim_env)?;
+            use kelpie_core::current_runtime;
+            let service = create_service(current_runtime(), &sim_env)?;
 
             // Create agent
             let request = CreateAgentRequest {
@@ -494,6 +524,8 @@ async fn test_dst_llm_streaming_with_comprehensive_faults() {
                 tags: vec![],
                 metadata: serde_json::json!({}),
                 project_id: None,
+                user_id: None,
+                org_id: None,
             };
             let agent = service.create_agent(request).await?;
 

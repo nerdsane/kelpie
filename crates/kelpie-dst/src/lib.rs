@@ -37,6 +37,9 @@
 pub mod agent;
 pub mod clock;
 pub mod fault;
+pub mod http;
+pub mod invariants;
+pub mod liveness;
 pub mod llm;
 pub mod network;
 pub mod rng;
@@ -45,11 +48,20 @@ pub mod sandbox_io;
 pub mod simulation;
 pub mod storage;
 pub mod teleport;
+pub mod time;
 pub mod vm;
 
 pub use agent::{AgentTestConfig, AgentTestState, BlockTestState, SimAgentEnv};
 pub use clock::SimClock;
 pub use fault::{FaultConfig, FaultInjector, FaultInjectorBuilder, FaultType};
+pub use http::{MockResponse, RecordedRequest, SimHttpClient};
+pub use invariants::{
+    AtomicVisibility, ConsistentHolder, Durability, FencingTokenMonotonic, Invariant,
+    InvariantChecker, InvariantCheckingSimulation, InvariantViolation, LeaseInfo, LeaseUniqueness,
+    NoSplitBrain, NodeInfo, NodeState, NodeStatus, PlacementConsistency, ReadYourWrites,
+    SingleActivation, Snapshot, SnapshotConsistency, SystemState, Transaction, TransactionState,
+    WalEntry, WalEntryStatus,
+};
 pub use kelpie_core::teleport::{Architecture, SnapshotKind, TeleportPackage, VmSnapshotBlob};
 pub use llm::{
     SimChatMessage, SimCompletionResponse, SimLlmClient, SimToolCall, SimToolDefinition,
@@ -61,4 +73,12 @@ pub use sandbox_io::{SimSandboxIO, SimSandboxIOFactory};
 pub use simulation::{SimConfig, SimEnvironment, Simulation};
 pub use storage::SimStorage;
 pub use teleport::SimTeleportStorage;
+pub use time::{RealTime, SimTime};
 pub use vm::{SimVm, SimVmFactory};
+
+// Liveness property verification
+pub use liveness::{
+    verify_eventually, verify_leads_to, BoundedLiveness, LivenessResult, LivenessViolation,
+    SystemStateSnapshot, LIVENESS_CHECK_INTERVAL_MS_DEFAULT, LIVENESS_STEPS_MAX,
+    LIVENESS_TIMEOUT_MS_DEFAULT,
+};

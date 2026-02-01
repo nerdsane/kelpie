@@ -1,0 +1,1467 @@
+{
+  "version": "1.0.0",
+  "generated_at": "2026-01-30T16:11:55.195465+00:00",
+  "crates": [
+    {
+      "crate_name": "kelpie-core",
+      "root_path": "crates/kelpie-core",
+      "modules": [
+        {
+          "name": "kelpie-core::telemetry",
+          "path": "crates/kelpie-core/src/telemetry.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-core::runtime",
+          "path": "crates/kelpie-core/src/runtime.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-core::io",
+          "path": "crates/kelpie-core/src/io.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-core::constants",
+          "path": "crates/kelpie-core/src/constants.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-core::error",
+          "path": "crates/kelpie-core/src/error.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-core::config",
+          "path": "crates/kelpie-core/src/config.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-core",
+          "path": "crates/kelpie-core/src/lib.rs",
+          "is_public": false,
+          "children": [
+            "actor",
+            "config",
+            "constants",
+            "error",
+            "http",
+            "io",
+            "metrics",
+            "runtime",
+            "telemetry",
+            "teleport"
+          ]
+        },
+        {
+          "name": "kelpie-core::teleport",
+          "path": "crates/kelpie-core/src/teleport.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-core::metrics",
+          "path": "crates/kelpie-core/src/metrics.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-core::actor",
+          "path": "crates/kelpie-core/src/actor.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-core::http",
+          "path": "crates/kelpie-core/src/http.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        }
+      ]
+    },
+    {
+      "crate_name": "kelpie-runtime",
+      "root_path": "crates/kelpie-runtime",
+      "modules": [
+        {
+          "name": "kelpie-runtime::runtime",
+          "path": "crates/kelpie-runtime/src/runtime.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-runtime::handle",
+          "path": "crates/kelpie-runtime/src/handle.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-runtime",
+          "path": "crates/kelpie-runtime/src/lib.rs",
+          "is_public": false,
+          "children": [
+            "activation",
+            "dispatcher",
+            "handle",
+            "mailbox",
+            "runtime"
+          ]
+        },
+        {
+          "name": "kelpie-runtime::dispatcher",
+          "path": "crates/kelpie-runtime/src/dispatcher.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-runtime::mailbox",
+          "path": "crates/kelpie-runtime/src/mailbox.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-runtime::activation",
+          "path": "crates/kelpie-runtime/src/activation.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        }
+      ]
+    },
+    {
+      "crate_name": "kelpie-registry",
+      "root_path": "crates/kelpie-registry",
+      "modules": [
+        {
+          "name": "kelpie-registry::cluster_testable",
+          "path": "crates/kelpie-registry/src/cluster_testable.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-registry::cluster_types",
+          "path": "crates/kelpie-registry/src/cluster_types.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-registry::registry",
+          "path": "crates/kelpie-registry/src/registry.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-registry::error",
+          "path": "crates/kelpie-registry/src/error.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-registry",
+          "path": "crates/kelpie-registry/src/lib.rs",
+          "is_public": false,
+          "children": [
+            "cluster",
+            "cluster_storage",
+            "cluster_testable",
+            "cluster_types",
+            "error",
+            "fdb",
+            "heartbeat",
+            "lease",
+            "membership",
+            "node",
+            "placement",
+            "registry",
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-registry::membership",
+          "path": "crates/kelpie-registry/src/membership.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-registry::lease",
+          "path": "crates/kelpie-registry/src/lease.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-registry::node",
+          "path": "crates/kelpie-registry/src/node.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-registry::placement",
+          "path": "crates/kelpie-registry/src/placement.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-registry::heartbeat",
+          "path": "crates/kelpie-registry/src/heartbeat.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-registry::cluster_storage",
+          "path": "crates/kelpie-registry/src/cluster_storage.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-registry::fdb",
+          "path": "crates/kelpie-registry/src/fdb.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-registry::cluster",
+          "path": "crates/kelpie-registry/src/cluster.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        }
+      ]
+    },
+    {
+      "crate_name": "kelpie-storage",
+      "root_path": "crates/kelpie-storage",
+      "modules": [
+        {
+          "name": "kelpie-storage::kv",
+          "path": "crates/kelpie-storage/src/kv.rs",
+          "is_public": false
+        },
+        {
+          "name": "kelpie-storage::wal",
+          "path": "crates/kelpie-storage/src/wal.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-storage::transaction",
+          "path": "crates/kelpie-storage/src/transaction.rs",
+          "is_public": false
+        },
+        {
+          "name": "kelpie-storage",
+          "path": "crates/kelpie-storage/src/lib.rs",
+          "is_public": false,
+          "children": [
+            "fdb",
+            "kv",
+            "memory",
+            "transaction"
+          ]
+        },
+        {
+          "name": "kelpie-storage::memory",
+          "path": "crates/kelpie-storage/src/memory.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-storage::fdb",
+          "path": "crates/kelpie-storage/src/fdb.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        }
+      ]
+    },
+    {
+      "crate_name": "kelpie-dst",
+      "root_path": "crates/kelpie-dst",
+      "modules": [
+        {
+          "name": "kelpie-dst::llm",
+          "path": "crates/kelpie-dst/src/llm.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-dst::vm",
+          "path": "crates/kelpie-dst/src/vm.rs",
+          "is_public": false
+        },
+        {
+          "name": "kelpie-dst::rng",
+          "path": "crates/kelpie-dst/src/rng.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-dst::clock",
+          "path": "crates/kelpie-dst/src/clock.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-dst::sandbox_io",
+          "path": "crates/kelpie-dst/src/sandbox_io.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-dst",
+          "path": "crates/kelpie-dst/src/lib.rs",
+          "is_public": false,
+          "children": [
+            "agent",
+            "clock",
+            "fault",
+            "http",
+            "invariants",
+            "liveness",
+            "llm",
+            "network",
+            "rng",
+            "sandbox",
+            "sandbox_io",
+            "simulation",
+            "storage",
+            "teleport",
+            "time",
+            "vm"
+          ]
+        },
+        {
+          "name": "kelpie-dst::liveness",
+          "path": "crates/kelpie-dst/src/liveness.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-dst::teleport",
+          "path": "crates/kelpie-dst/src/teleport.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-dst::time",
+          "path": "crates/kelpie-dst/src/time.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-dst::simulation",
+          "path": "crates/kelpie-dst/src/simulation.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-dst::fault",
+          "path": "crates/kelpie-dst/src/fault.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-dst::invariants",
+          "path": "crates/kelpie-dst/src/invariants.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-dst::agent",
+          "path": "crates/kelpie-dst/src/agent.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-dst::storage",
+          "path": "crates/kelpie-dst/src/storage.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-dst::http",
+          "path": "crates/kelpie-dst/src/http.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-dst::network",
+          "path": "crates/kelpie-dst/src/network.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-dst::sandbox",
+          "path": "crates/kelpie-dst/src/sandbox.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        }
+      ]
+    },
+    {
+      "crate_name": "kelpie-sandbox",
+      "root_path": "crates/kelpie-sandbox",
+      "modules": [
+        {
+          "name": "kelpie-sandbox::exec",
+          "path": "crates/kelpie-sandbox/src/exec.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-sandbox::io",
+          "path": "crates/kelpie-sandbox/src/io.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-sandbox::error",
+          "path": "crates/kelpie-sandbox/src/error.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-sandbox::config",
+          "path": "crates/kelpie-sandbox/src/config.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-sandbox",
+          "path": "crates/kelpie-sandbox/src/lib.rs",
+          "is_public": false,
+          "children": [
+            "agent_manager",
+            "config",
+            "error",
+            "exec",
+            "io",
+            "mock",
+            "pool",
+            "process",
+            "snapshot",
+            "traits",
+            "firecracker",
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-sandbox::firecracker",
+          "path": "crates/kelpie-sandbox/src/firecracker.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-sandbox::mock",
+          "path": "crates/kelpie-sandbox/src/mock.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-sandbox::snapshot",
+          "path": "crates/kelpie-sandbox/src/snapshot.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-sandbox::pool",
+          "path": "crates/kelpie-sandbox/src/pool.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-sandbox::agent_manager",
+          "path": "crates/kelpie-sandbox/src/agent_manager.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-sandbox::process",
+          "path": "crates/kelpie-sandbox/src/process.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-sandbox::traits",
+          "path": "crates/kelpie-sandbox/src/traits.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        }
+      ]
+    },
+    {
+      "crate_name": "kelpie-vm",
+      "root_path": "crates/kelpie-vm",
+      "modules": [
+        {
+          "name": "kelpie-vm::error",
+          "path": "crates/kelpie-vm/src/error.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-vm::config",
+          "path": "crates/kelpie-vm/src/config.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-vm::backend",
+          "path": "crates/kelpie-vm/src/backend.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-vm",
+          "path": "crates/kelpie-vm/src/lib.rs",
+          "is_public": false,
+          "children": [
+            "backend",
+            "config",
+            "error",
+            "mock",
+            "snapshot",
+            "traits",
+            "virtio_fs",
+            "backends"
+          ]
+        },
+        {
+          "name": "kelpie-vm::mock",
+          "path": "crates/kelpie-vm/src/mock.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-vm::virtio_fs",
+          "path": "crates/kelpie-vm/src/virtio_fs.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-vm::snapshot",
+          "path": "crates/kelpie-vm/src/snapshot.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-vm::traits",
+          "path": "crates/kelpie-vm/src/traits.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-vm::backends::vz",
+          "path": "crates/kelpie-vm/src/backends/vz.rs",
+          "is_public": false
+        },
+        {
+          "name": "kelpie-vm::backends::firecracker",
+          "path": "crates/kelpie-vm/src/backends/firecracker.rs",
+          "is_public": false
+        },
+        {
+          "name": "kelpie-vm::backends",
+          "path": "crates/kelpie-vm/src/backends/mod.rs",
+          "is_public": false,
+          "children": [
+            "firecracker",
+            "vz"
+          ]
+        }
+      ]
+    },
+    {
+      "crate_name": "kelpie-cluster",
+      "root_path": "crates/kelpie-cluster",
+      "modules": [
+        {
+          "name": "kelpie-cluster::error",
+          "path": "crates/kelpie-cluster/src/error.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-cluster::handler",
+          "path": "crates/kelpie-cluster/src/handler.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-cluster::config",
+          "path": "crates/kelpie-cluster/src/config.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-cluster",
+          "path": "crates/kelpie-cluster/src/lib.rs",
+          "is_public": false,
+          "children": [
+            "cluster",
+            "config",
+            "error",
+            "handler",
+            "migration",
+            "rpc",
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-cluster::migration",
+          "path": "crates/kelpie-cluster/src/migration.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-cluster::cluster",
+          "path": "crates/kelpie-cluster/src/cluster.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-cluster::rpc",
+          "path": "crates/kelpie-cluster/src/rpc.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        }
+      ]
+    },
+    {
+      "crate_name": "kelpie-memory",
+      "root_path": "crates/kelpie-memory",
+      "modules": [
+        {
+          "name": "kelpie-memory::core",
+          "path": "crates/kelpie-memory/src/core.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-memory::types",
+          "path": "crates/kelpie-memory/src/types.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-memory::error",
+          "path": "crates/kelpie-memory/src/error.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-memory::checkpoint",
+          "path": "crates/kelpie-memory/src/checkpoint.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-memory",
+          "path": "crates/kelpie-memory/src/lib.rs",
+          "is_public": false,
+          "children": [
+            "block",
+            "checkpoint",
+            "core",
+            "embedder",
+            "error",
+            "search",
+            "types",
+            "working",
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-memory::block",
+          "path": "crates/kelpie-memory/src/block.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-memory::embedder",
+          "path": "crates/kelpie-memory/src/embedder.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-memory::search",
+          "path": "crates/kelpie-memory/src/search.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-memory::working",
+          "path": "crates/kelpie-memory/src/working.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        }
+      ]
+    },
+    {
+      "crate_name": "kelpie-server",
+      "root_path": "crates/kelpie-server",
+      "modules": [
+        {
+          "name": "kelpie-server::llm",
+          "path": "crates/kelpie-server/src/llm.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server",
+          "path": "crates/kelpie-server/src/lib.rs",
+          "is_public": false,
+          "children": [
+            "actor",
+            "api",
+            "http",
+            "interface",
+            "llm",
+            "memory",
+            "models",
+            "security",
+            "service",
+            "state",
+            "storage",
+            "tools"
+          ]
+        },
+        {
+          "name": "kelpie-server::models",
+          "path": "crates/kelpie-server/src/models.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::invariants",
+          "path": "crates/kelpie-server/src/invariants.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::state",
+          "path": "crates/kelpie-server/src/state.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::main",
+          "path": "crates/kelpie-server/src/main.rs",
+          "is_public": false,
+          "children": [
+            "api"
+          ]
+        },
+        {
+          "name": "kelpie-server::http",
+          "path": "crates/kelpie-server/src/http.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::interface",
+          "path": "crates/kelpie-server/src/interface/mod.rs",
+          "is_public": false
+        },
+        {
+          "name": "kelpie-server::tools::code_execution",
+          "path": "crates/kelpie-server/src/tools/code_execution.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::tools::registry",
+          "path": "crates/kelpie-server/src/tools/registry.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::tools::memory",
+          "path": "crates/kelpie-server/src/tools/memory.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::tools::agent_call",
+          "path": "crates/kelpie-server/src/tools/agent_call.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::tools",
+          "path": "crates/kelpie-server/src/tools/mod.rs",
+          "is_public": false,
+          "children": [
+            "agent_call",
+            "code_execution",
+            "heartbeat",
+            "memory",
+            "messaging",
+            "registry",
+            "web_search"
+          ]
+        },
+        {
+          "name": "kelpie-server::tools::messaging",
+          "path": "crates/kelpie-server/src/tools/messaging.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::tools::heartbeat",
+          "path": "crates/kelpie-server/src/tools/heartbeat.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::tools::web_search",
+          "path": "crates/kelpie-server/src/tools/web_search.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::memory",
+          "path": "crates/kelpie-server/src/memory/mod.rs",
+          "is_public": false,
+          "children": [
+            "umi_backend"
+          ]
+        },
+        {
+          "name": "kelpie-server::memory::umi_backend",
+          "path": "crates/kelpie-server/src/memory/umi_backend.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::security::audit",
+          "path": "crates/kelpie-server/src/security/audit.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::security::auth",
+          "path": "crates/kelpie-server/src/security/auth.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::security",
+          "path": "crates/kelpie-server/src/security/mod.rs",
+          "is_public": false,
+          "children": [
+            "audit",
+            "auth"
+          ]
+        },
+        {
+          "name": "kelpie-server::storage::types",
+          "path": "crates/kelpie-server/src/storage/types.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::storage::adapter",
+          "path": "crates/kelpie-server/src/storage/adapter.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::storage::teleport",
+          "path": "crates/kelpie-server/src/storage/teleport.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::storage::sim",
+          "path": "crates/kelpie-server/src/storage/sim.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::storage",
+          "path": "crates/kelpie-server/src/storage/mod.rs",
+          "is_public": false,
+          "children": [
+            "adapter",
+            "fdb",
+            "sim",
+            "teleport",
+            "traits",
+            "types"
+          ]
+        },
+        {
+          "name": "kelpie-server::storage::traits",
+          "path": "crates/kelpie-server/src/storage/traits.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::storage::fdb",
+          "path": "crates/kelpie-server/src/storage/fdb.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::api::agents",
+          "path": "crates/kelpie-server/src/api/agents.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::api::mcp_servers",
+          "path": "crates/kelpie-server/src/api/mcp_servers.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::api::identities",
+          "path": "crates/kelpie-server/src/api/identities.rs",
+          "is_public": false
+        },
+        {
+          "name": "kelpie-server::api::groups",
+          "path": "crates/kelpie-server/src/api/groups.rs",
+          "is_public": false
+        },
+        {
+          "name": "kelpie-server::api::tools",
+          "path": "crates/kelpie-server/src/api/tools.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::api::import_export",
+          "path": "crates/kelpie-server/src/api/import_export.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::api::agent_groups",
+          "path": "crates/kelpie-server/src/api/agent_groups.rs",
+          "is_public": false
+        },
+        {
+          "name": "kelpie-server::api::teleport",
+          "path": "crates/kelpie-server/src/api/teleport.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::api",
+          "path": "crates/kelpie-server/src/api/mod.rs",
+          "is_public": false,
+          "children": [
+            "agent_groups",
+            "agents",
+            "archival",
+            "blocks",
+            "groups",
+            "identities",
+            "import_export",
+            "mcp_servers",
+            "messages",
+            "projects",
+            "scheduling",
+            "standalone_blocks",
+            "streaming",
+            "summarization",
+            "teleport",
+            "tools"
+          ]
+        },
+        {
+          "name": "kelpie-server::api::standalone_blocks",
+          "path": "crates/kelpie-server/src/api/standalone_blocks.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::api::streaming",
+          "path": "crates/kelpie-server/src/api/streaming.rs",
+          "is_public": false
+        },
+        {
+          "name": "kelpie-server::api::blocks",
+          "path": "crates/kelpie-server/src/api/blocks.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::api::projects",
+          "path": "crates/kelpie-server/src/api/projects.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::api::scheduling",
+          "path": "crates/kelpie-server/src/api/scheduling.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::api::summarization",
+          "path": "crates/kelpie-server/src/api/summarization.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::api::archival",
+          "path": "crates/kelpie-server/src/api/archival.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::api::messages",
+          "path": "crates/kelpie-server/src/api/messages.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::service",
+          "path": "crates/kelpie-server/src/service/mod.rs",
+          "is_public": false,
+          "children": [
+            "teleport_service"
+          ]
+        },
+        {
+          "name": "kelpie-server::service::teleport_service",
+          "path": "crates/kelpie-server/src/service/teleport_service.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::actor::agent_actor",
+          "path": "crates/kelpie-server/src/actor/agent_actor.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::actor::llm_trait",
+          "path": "crates/kelpie-server/src/actor/llm_trait.rs",
+          "is_public": false
+        },
+        {
+          "name": "kelpie-server::actor::registry_actor",
+          "path": "crates/kelpie-server/src/actor/registry_actor.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-server::actor",
+          "path": "crates/kelpie-server/src/actor/mod.rs",
+          "is_public": false,
+          "children": [
+            "agent_actor",
+            "dispatcher_adapter",
+            "llm_trait",
+            "registry_actor",
+            "state"
+          ]
+        },
+        {
+          "name": "kelpie-server::actor::state",
+          "path": "crates/kelpie-server/src/actor/state.rs",
+          "is_public": false
+        },
+        {
+          "name": "kelpie-server::actor::dispatcher_adapter",
+          "path": "crates/kelpie-server/src/actor/dispatcher_adapter.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        }
+      ]
+    },
+    {
+      "crate_name": "kelpie-tools",
+      "root_path": "crates/kelpie-tools",
+      "modules": [
+        {
+          "name": "kelpie-tools::registry",
+          "path": "crates/kelpie-tools/src/registry.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::error",
+          "path": "crates/kelpie-tools/src/error.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools",
+          "path": "crates/kelpie-tools/src/lib.rs",
+          "is_public": false,
+          "children": [
+            "builtin",
+            "error",
+            "http_client",
+            "http_tool",
+            "mcp",
+            "registry",
+            "sim",
+            "traits",
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::http_client",
+          "path": "crates/kelpie-tools/src/http_client.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::sim",
+          "path": "crates/kelpie-tools/src/sim.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::traits",
+          "path": "crates/kelpie-tools/src/traits.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::mcp",
+          "path": "crates/kelpie-tools/src/mcp.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::http_tool",
+          "path": "crates/kelpie-tools/src/http_tool.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::builtin::shell",
+          "path": "crates/kelpie-tools/src/builtin/shell.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::builtin::filesystem",
+          "path": "crates/kelpie-tools/src/builtin/filesystem.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::builtin::git",
+          "path": "crates/kelpie-tools/src/builtin/git.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-tools::builtin",
+          "path": "crates/kelpie-tools/src/builtin/mod.rs",
+          "is_public": false,
+          "children": [
+            "filesystem",
+            "git",
+            "shell"
+          ]
+        }
+      ]
+    },
+    {
+      "crate_name": "kelpie-wasm",
+      "root_path": "crates/kelpie-wasm",
+      "modules": [
+        {
+          "name": "kelpie-wasm::runtime",
+          "path": "crates/kelpie-wasm/src/runtime.rs",
+          "is_public": false,
+          "children": [
+            "tests"
+          ]
+        },
+        {
+          "name": "kelpie-wasm",
+          "path": "crates/kelpie-wasm/src/lib.rs",
+          "is_public": false,
+          "children": [
+            "runtime"
+          ]
+        }
+      ]
+    },
+    {
+      "crate_name": "kelpie-cli",
+      "root_path": "crates/kelpie-cli",
+      "modules": [
+        {
+          "name": "kelpie-cli::repl",
+          "path": "crates/kelpie-cli/src/repl.rs",
+          "is_public": false
+        },
+        {
+          "name": "kelpie-cli::client",
+          "path": "crates/kelpie-cli/src/client.rs",
+          "is_public": false
+        },
+        {
+          "name": "kelpie-cli::main",
+          "path": "crates/kelpie-cli/src/main.rs",
+          "is_public": false,
+          "children": [
+            "client",
+            "repl"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -140,6 +140,52 @@ PATCH /v1/agents/{id}/core-memory/blocks/{label}
 PATCH /v1/agents/{id}/blocks/{block_id}
 ```
 
+### Memory Structure
+
+**Letta's MemoryBank** is a hierarchical structure with explicit types:
+```python
+# Letta internal structure
+memory = MemoryBank(
+    core_memory=CoreMemory(
+        blocks=[
+            Block(label="persona", value="..."),
+            Block(label="human", value="..."),
+        ]
+    ),
+    archival_memory=ArchivalMemory(storage=VectorDB(...)),
+    recall_memory=RecallMemory(storage=VectorDB(...)),
+)
+```
+
+**Kelpie's Memory** uses a flat block structure that maps to the same API:
+```rust
+// Kelpie internal structure
+agent {
+    blocks: Vec<Block>,           // Core memory blocks (persona, human, etc.)
+    archival: Vec<ArchivalEntry>, // Archival memory entries
+    messages: Vec<Message>,       // Conversation history (recall)
+}
+```
+
+**Impact on Usage:**
+
+| Operation | Letta | Kelpie | Compatibility |
+|-----------|-------|--------|---------------|
+| Create agent with blocks | ✅ | ✅ | Same JSON format |
+| Get memory blocks | ✅ | ✅ | Same response format |
+| Update block by label | `/blocks/{label}` | `/core-memory/blocks/{label}` | Path differs |
+| Update block by ID | `/blocks/{id}` | `/blocks/{id}` | ✅ Same |
+| Archival memory search | ✅ | ✅ | Same endpoint |
+| Recall memory search | ✅ | ✅ | Same endpoint |
+
+**For most use cases, the flat structure is transparent.** The API response formats match Letta's expected formats, so SDK code works without changes.
+
+**Workaround for MemoryBank access:** If your code directly accesses `agent.memory.core_memory.blocks`, refactor to use the REST API instead:
+```python
+# Instead of: agent.memory.core_memory.blocks
+blocks = requests.get(f"{BASE_URL}/v1/agents/{id}/blocks").json()
+```
+
 ### LLM Configuration
 
 Kelpie requires environment variables for LLM providers:

@@ -9,7 +9,7 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
-use crate::models::{Block, Message};
+use crate::models::{ArchivalEntry, Block, Message};
 
 use super::types::{AgentMetadata, CustomToolRecord, SessionState};
 
@@ -275,6 +275,50 @@ pub trait AgentStorage: Send + Sync {
     async fn delete_messages(&self, agent_id: &str) -> Result<(), StorageError>;
 
     // =========================================================================
+    // Archival Memory Operations
+    // =========================================================================
+
+    /// Save an archival entry (long-term memory)
+    async fn save_archival_entry(
+        &self,
+        agent_id: &str,
+        entry: &ArchivalEntry,
+    ) -> Result<(), StorageError>;
+
+    /// Load archival entries for an agent
+    async fn load_archival_entries(
+        &self,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ArchivalEntry>, StorageError>;
+
+    /// Get a specific archival entry by ID
+    async fn get_archival_entry(
+        &self,
+        agent_id: &str,
+        entry_id: &str,
+    ) -> Result<Option<ArchivalEntry>, StorageError>;
+
+    /// Delete an archival entry
+    async fn delete_archival_entry(
+        &self,
+        agent_id: &str,
+        entry_id: &str,
+    ) -> Result<(), StorageError>;
+
+    /// Delete all archival entries for an agent
+    async fn delete_archival_entries(&self, agent_id: &str) -> Result<(), StorageError>;
+
+    /// Search archival entries (basic text search)
+    /// Returns entries matching the query, limited by `limit`
+    async fn search_archival_entries(
+        &self,
+        agent_id: &str,
+        query: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ArchivalEntry>, StorageError>;
+
+    // =========================================================================
     // Transactional Operations
     // =========================================================================
 
@@ -294,6 +338,96 @@ pub trait AgentStorage: Send + Sync {
         }
         Ok(())
     }
+
+    // =========================================================================
+    // MCP Server Operations
+    // =========================================================================
+
+    /// Save MCP server configuration
+    async fn save_mcp_server(&self, server: &crate::models::MCPServer) -> Result<(), StorageError>;
+
+    /// Load MCP server by ID
+    async fn load_mcp_server(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::models::MCPServer>, StorageError>;
+
+    /// Delete MCP server
+    async fn delete_mcp_server(&self, id: &str) -> Result<(), StorageError>;
+
+    /// List all MCP servers
+    async fn list_mcp_servers(&self) -> Result<Vec<crate::models::MCPServer>, StorageError>;
+
+    // =========================================================================
+    // Agent Group Operations
+    // =========================================================================
+
+    /// Save agent group
+    async fn save_agent_group(&self, group: &crate::models::AgentGroup)
+        -> Result<(), StorageError>;
+
+    /// Load agent group by ID
+    async fn load_agent_group(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::models::AgentGroup>, StorageError>;
+
+    /// Delete agent group
+    async fn delete_agent_group(&self, id: &str) -> Result<(), StorageError>;
+
+    /// List all agent groups
+    async fn list_agent_groups(&self) -> Result<Vec<crate::models::AgentGroup>, StorageError>;
+
+    // =========================================================================
+    // Identity Operations
+    // =========================================================================
+
+    /// Save identity
+    async fn save_identity(&self, identity: &crate::models::Identity) -> Result<(), StorageError>;
+
+    /// Load identity by ID
+    async fn load_identity(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::models::Identity>, StorageError>;
+
+    /// Delete identity
+    async fn delete_identity(&self, id: &str) -> Result<(), StorageError>;
+
+    /// List all identities
+    async fn list_identities(&self) -> Result<Vec<crate::models::Identity>, StorageError>;
+
+    // =========================================================================
+    // Project Operations
+    // =========================================================================
+
+    /// Save project
+    async fn save_project(&self, project: &crate::models::Project) -> Result<(), StorageError>;
+
+    /// Load project by ID
+    async fn load_project(&self, id: &str) -> Result<Option<crate::models::Project>, StorageError>;
+
+    /// Delete project
+    async fn delete_project(&self, id: &str) -> Result<(), StorageError>;
+
+    /// List all projects
+    async fn list_projects(&self) -> Result<Vec<crate::models::Project>, StorageError>;
+
+    // =========================================================================
+    // Job Operations
+    // =========================================================================
+
+    /// Save scheduled job
+    async fn save_job(&self, job: &crate::models::Job) -> Result<(), StorageError>;
+
+    /// Load job by ID
+    async fn load_job(&self, id: &str) -> Result<Option<crate::models::Job>, StorageError>;
+
+    /// Delete job
+    async fn delete_job(&self, id: &str) -> Result<(), StorageError>;
+
+    /// List all jobs
+    async fn list_jobs(&self) -> Result<Vec<crate::models::Job>, StorageError>;
 }
 
 #[cfg(test)]

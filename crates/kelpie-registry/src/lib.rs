@@ -32,21 +32,51 @@
 //! registry.register_actor(actor_id, node_id).await?;
 //! ```
 
+#[cfg(feature = "fdb")]
+mod cluster;
+mod cluster_storage;
+mod cluster_testable;
+mod cluster_types;
 mod error;
+#[cfg(feature = "fdb")]
+mod fdb;
 mod heartbeat;
+mod lease;
+mod membership;
 mod node;
 mod placement;
 mod registry;
 
+#[cfg(feature = "fdb")]
+pub use cluster::{ClusterMembership, ELECTION_TIMEOUT_MS, PRIMARY_STEPDOWN_DELAY_MS};
+pub use cluster_storage::{ClusterStorageBackend, MockClusterStorage};
+pub use cluster_testable::{
+    TestableClusterMembership, ELECTION_TIMEOUT_MS as TESTABLE_ELECTION_TIMEOUT_MS,
+    PRIMARY_STEPDOWN_DELAY_MS as TESTABLE_PRIMARY_STEPDOWN_DELAY_MS,
+};
+pub use cluster_types::{ClusterNodeInfo, MigrationCandidate, MigrationQueue, MigrationResult};
 pub use error::{RegistryError, RegistryResult};
+#[cfg(feature = "fdb")]
+pub use fdb::{FdbRegistry, FdbRegistryConfig, Lease as FdbLease, LeaseRenewalTask};
 pub use heartbeat::{
     Heartbeat, HeartbeatConfig, HeartbeatTracker, NodeHeartbeatState, HEARTBEAT_FAILURE_COUNT,
     HEARTBEAT_INTERVAL_MS_MAX, HEARTBEAT_INTERVAL_MS_MIN, HEARTBEAT_SUSPECT_COUNT,
+};
+pub use lease::{
+    Lease, LeaseConfig, LeaseManager, MemoryLeaseManager, LEASE_DURATION_MS_DEFAULT,
+    LEASE_DURATION_MS_MAX, LEASE_DURATION_MS_MIN,
+};
+pub use membership::{
+    ClusterState, MembershipView, NodeState, PrimaryInfo, HEARTBEAT_FAILURE_THRESHOLD,
+    HEARTBEAT_INTERVAL_MS, HEARTBEAT_SUSPECT_THRESHOLD, MEMBERSHIP_VIEW_NUMBER_MAX,
+    PRIMARY_TERM_MAX,
 };
 pub use node::{NodeId, NodeInfo, NodeStatus, NODE_ID_LENGTH_BYTES_MAX};
 pub use placement::{
     validate_placement, ActorPlacement, PlacementContext, PlacementDecision, PlacementStrategy,
 };
+// Re-export deprecated items for backward compatibility
+#[allow(deprecated)]
 pub use registry::{Clock, MemoryRegistry, MockClock, Registry, SystemClock};
 
 #[cfg(test)]

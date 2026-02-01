@@ -11,6 +11,7 @@ use axum::{
     Json,
 };
 use chrono::Utc;
+use kelpie_core::Runtime;
 use kelpie_server::models::{
     AgentState, CreateAgentRequest, CreateBlockRequest, ExportAgentResponse, ImportAgentRequest,
     Message,
@@ -35,8 +36,8 @@ const EXPORT_MESSAGES_MAX: usize = 10000;
 ///
 /// GET /v1/agents/{agent_id}/export
 #[instrument(skip(state), fields(agent_id = %agent_id, include_messages = query.include_messages), level = "info")]
-pub async fn export_agent(
-    State(state): State<AppState>,
+pub async fn export_agent<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
     Query(query): Query<ExportQuery>,
 ) -> Result<Json<ExportAgentResponse>, ApiError> {
@@ -74,8 +75,8 @@ pub async fn export_agent(
 ///
 /// POST /v1/agents/import
 #[instrument(skip(state, request), fields(agent_name = %request.agent.name, message_count = request.messages.len()), level = "info")]
-pub async fn import_agent(
-    State(state): State<AppState>,
+pub async fn import_agent<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Json(request): Json<ImportAgentRequest>,
 ) -> Result<Json<AgentState>, ApiError> {
     let agent_data = request.agent;
@@ -117,6 +118,8 @@ pub async fn import_agent(
         tags: agent_data.tags,
         metadata: agent_data.metadata,
         project_id: agent_data.project_id,
+        user_id: None,
+        org_id: None,
     };
 
     // Create agent
@@ -124,7 +127,7 @@ pub async fn import_agent(
 
     // Import messages if provided
     if !request.messages.is_empty() {
-        match import_messages(&state, &created.id, request.messages) {
+        match import_messages(&state, &created.id, request.messages).await {
             Ok(imported_count) => {
                 tracing::info!(
                     agent_id = %created.id,
@@ -155,8 +158,8 @@ pub async fn import_agent(
 /// Helper function to import messages into an agent
 ///
 /// TigerStyle: Separate function for clarity and error isolation.
-fn import_messages(
-    state: &AppState,
+async fn import_messages<R: Runtime + 'static>(
+    state: &AppState<R>,
     agent_id: &str,
     messages: Vec<kelpie_server::models::MessageImportData>,
 ) -> Result<usize, String> {
@@ -172,11 +175,14 @@ fn import_messages(
             content: msg_data.content,
             tool_call_id: msg_data.tool_call_id,
             tool_calls: msg_data.tool_calls,
+            tool_call: None,
+            tool_return: None,
+            status: None,
             created_at: Utc::now(),
         };
 
-        // Store message in agent state
-        if let Err(e) = state.add_message(agent_id, message) {
+        // Store message in agent state (with storage persistence)
+        if let Err(e) = state.add_message_async(agent_id, message).await {
             tracing::warn!(
                 agent_id = %agent_id,
                 error = ?e,
@@ -199,6 +205,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
+    use kelpie_core::Runtime;
     use kelpie_dst::{DeterministicRng, FaultInjector, SimStorage};
     use kelpie_runtime::{CloneFactory, Dispatcher, DispatcherConfig};
     use kelpie_server::actor::{AgentActor, AgentActorState, LlmClient, LlmMessage, LlmResponse};
@@ -255,19 +262,22 @@ mod tests {
         let storage = SimStorage::new(rng.fork(), faults);
         let kv = Arc::new(storage);
 
-        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState>::new(
+        let runtime = kelpie_core::TokioRuntime;
+
+        let mut dispatcher = Dispatcher::<AgentActor, AgentActorState, _>::new(
             factory,
             kv,
             DispatcherConfig::default(),
+            runtime.clone(),
         );
         let handle = dispatcher.handle();
 
-        tokio::spawn(async move {
+        drop(runtime.spawn(async move {
             dispatcher.run().await;
-        });
+        }));
 
         let service = service::AgentService::new(handle.clone());
-        let state = AppState::with_agent_service(service, handle);
+        let state = AppState::with_agent_service(runtime, service, handle);
 
         api::router(state)
     }

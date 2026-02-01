@@ -4,6 +4,7 @@
 //!
 //! TigerStyle: Comprehensive transport testing with real execution.
 
+use kelpie_core::Runtime;
 use kelpie_server::tools::UnifiedToolRegistry;
 use kelpie_tools::McpConfig;
 use serde_json::json;
@@ -130,7 +131,7 @@ async fn test_mcp_stdio_concurrent_execution() {
     let mut handles = vec![];
     for i in 0..5 {
         let registry_clone = Arc::clone(&registry);
-        let handle = tokio::spawn(async move {
+        let handle = kelpie_core::current_runtime().spawn(async move {
             registry_clone
                 .execute(
                     "echo",

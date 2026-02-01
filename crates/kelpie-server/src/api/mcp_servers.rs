@@ -3,12 +3,17 @@
 //! TigerStyle: RESTful MCP server management with explicit validation.
 //! Supports stdio, SSE, and streamable HTTP server types.
 
+// Allow tokio::spawn and tokio::time::timeout in production server code
+// This runs with real tokio runtime, not under DST
+#![allow(clippy::disallowed_methods)]
+
 use super::ApiError;
 use axum::{
     extract::{Path, State},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
+use kelpie_core::Runtime;
 use kelpie_server::models::{MCPServer, MCPServerConfig};
 use kelpie_server::state::AppState;
 use serde::{Deserialize, Serialize};
@@ -54,7 +59,7 @@ impl From<MCPServer> for MCPServerResponse {
 }
 
 /// Create router for MCP servers endpoints
-pub fn router() -> Router<AppState> {
+pub fn router<R: Runtime + 'static>() -> Router<AppState<R>> {
     Router::new()
         .route("/", get(list_servers).post(create_server))
         .route(
@@ -65,13 +70,17 @@ pub fn router() -> Router<AppState> {
                 .delete(delete_server),
         )
         .route("/:server_id/tools", get(list_server_tools))
+        .route("/:server_id/tools/:tool_id", get(get_server_tool))
+        .route("/:server_id/tools/:tool_id/run", post(run_server_tool))
 }
 
 /// List all MCP servers
 ///
 /// GET /v1/mcp-servers/
 #[instrument(skip(state), level = "info")]
-async fn list_servers(State(state): State<AppState>) -> Json<Vec<MCPServerResponse>> {
+async fn list_servers<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
+) -> Json<Vec<MCPServerResponse>> {
     let servers = state.list_mcp_servers().await;
     let items: Vec<MCPServerResponse> = servers.into_iter().map(MCPServerResponse::from).collect();
 
@@ -82,8 +91,8 @@ async fn list_servers(State(state): State<AppState>) -> Json<Vec<MCPServerRespon
 ///
 /// POST /v1/mcp-servers/
 #[instrument(skip(state, request), level = "info")]
-async fn create_server(
-    State(state): State<AppState>,
+async fn create_server<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Json(request): Json<CreateMCPServerRequest>,
 ) -> Result<Json<MCPServerResponse>, ApiError> {
     // Validate server name
@@ -99,11 +108,65 @@ async fn create_server(
 
     // Create the server
     let server = state
-        .create_mcp_server(request.server_name, request.config)
+        .create_mcp_server(request.server_name.clone(), request.config)
         .await
         .map_err(|e| ApiError::internal(format!("Failed to create MCP server: {}", e)))?;
 
     tracing::info!(server_id = %server.id, server_name = %server.server_name, "Created MCP server");
+
+    // TigerStyle: Spawn async tool discovery in background to avoid blocking server creation
+    // This prevents timeouts when MCP server subprocess is slow to start
+    // Convert server config to McpConfig using shared helper
+    let mcp_config =
+        AppState::<R>::mcp_server_config_to_mcp_config(&server.server_name, &server.config);
+
+    // Spawn background task for async tool discovery with timeout
+    // TigerStyle: Non-blocking tool discovery - server returns immediately
+    let state_clone = state.clone();
+    let server_name = server.server_name.clone();
+    let server_id = server.id.clone();
+
+    tokio::spawn(async move {
+        use std::time::Duration;
+
+        // TigerStyle: 30-second timeout prevents indefinite blocking
+        const TOOL_DISCOVERY_TIMEOUT_MS: u64 = 30_000;
+
+        let discovery_result = tokio::time::timeout(
+            Duration::from_millis(TOOL_DISCOVERY_TIMEOUT_MS),
+            state_clone
+                .tool_registry()
+                .connect_mcp_server(&server_name, mcp_config),
+        )
+        .await;
+
+        match discovery_result {
+            Ok(Ok(tool_count)) => {
+                tracing::info!(
+                    server_id = %server_id,
+                    server_name = %server_name,
+                    tool_count = tool_count,
+                    "Connected to MCP server and registered tools"
+                );
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    server_id = %server_id,
+                    server_name = %server_name,
+                    error = %e,
+                    "Failed to connect to MCP server or discover tools"
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    server_id = %server_id,
+                    server_name = %server_name,
+                    timeout_ms = TOOL_DISCOVERY_TIMEOUT_MS,
+                    "Tool discovery timed out - MCP server may be slow to start or unresponsive"
+                );
+            }
+        }
+    });
 
     Ok(Json(MCPServerResponse::from(server)))
 }
@@ -112,8 +175,8 @@ async fn create_server(
 ///
 /// GET /v1/mcp-servers/{server_id}
 #[instrument(skip(state), fields(server_id = %server_id), level = "info")]
-async fn get_server(
-    State(state): State<AppState>,
+async fn get_server<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(server_id): Path<String>,
 ) -> Result<Json<MCPServerResponse>, ApiError> {
     let server = state
@@ -128,8 +191,8 @@ async fn get_server(
 ///
 /// PUT/PATCH /v1/mcp-servers/{server_id}
 #[instrument(skip(state, request), fields(server_id = %server_id), level = "info")]
-async fn update_server(
-    State(state): State<AppState>,
+async fn update_server<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(server_id): Path<String>,
     Json(request): Json<UpdateMCPServerRequest>,
 ) -> Result<Json<MCPServerResponse>, ApiError> {
@@ -150,10 +213,35 @@ async fn update_server(
 ///
 /// DELETE /v1/mcp-servers/{server_id}
 #[instrument(skip(state), fields(server_id = %server_id), level = "info")]
-async fn delete_server(
-    State(state): State<AppState>,
+async fn delete_server<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(server_id): Path<String>,
 ) -> Result<(), ApiError> {
+    // TigerStyle: Get server details before deletion for proper cleanup
+    let server = state
+        .get_mcp_server(&server_id)
+        .await
+        .ok_or_else(|| ApiError::not_found("MCP server", &server_id))?;
+
+    // TigerStyle: Disconnect MCP client and clean up resources
+    // This prevents resource leaks from accumulated connections
+    let registry = state.tool_registry();
+    if let Err(e) = registry.disconnect_mcp_server(&server.server_name).await {
+        tracing::warn!(
+            server_id = %server_id,
+            server_name = %server.server_name,
+            error = %e,
+            "Failed to disconnect MCP client during delete (may not be connected)"
+        );
+    } else {
+        tracing::info!(
+            server_id = %server_id,
+            server_name = %server.server_name,
+            "Disconnected MCP client and unregistered tools"
+        );
+    }
+
+    // Delete the server record from storage
     state
         .delete_mcp_server(&server_id)
         .await
@@ -171,8 +259,8 @@ async fn delete_server(
 ///
 /// GET /v1/mcp-servers/{server_id}/tools
 #[instrument(skip(state), fields(server_id = %server_id), level = "info")]
-async fn list_server_tools(
-    State(state): State<AppState>,
+async fn list_server_tools<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(server_id): Path<String>,
 ) -> Result<Json<Vec<super::tools::ToolResponse>>, ApiError> {
     // Discover tools from the MCP server (returns JSON Values)
@@ -197,6 +285,83 @@ async fn list_server_tools(
     Ok(Json(tools))
 }
 
+/// Get a specific tool provided by an MCP server
+///
+/// GET /v1/mcp-servers/{server_id}/tools/{tool_id}
+#[instrument(skip(state), fields(server_id = %server_id, tool_id = %tool_id), level = "info")]
+async fn get_server_tool<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
+    Path((server_id, tool_id)): Path<(String, String)>,
+) -> Result<Json<super::tools::ToolResponse>, ApiError> {
+    // Discover tools from the MCP server (returns JSON Values)
+    let tool_values = state
+        .list_mcp_server_tools(&server_id)
+        .await
+        .map_err(|e| match e {
+            kelpie_server::state::StateError::NotFound { resource, id } => {
+                ApiError::not_found(resource, &id)
+            }
+            _ => ApiError::internal(format!("Failed to discover MCP server tools: {}", e)),
+        })?;
+
+    // Convert JSON Values to ToolResponse and find the requested tool
+    let tools: Vec<super::tools::ToolResponse> = tool_values
+        .into_iter()
+        .filter_map(|value| serde_json::from_value(value).ok())
+        .collect();
+
+    let tool = tools
+        .into_iter()
+        .find(|t| t.id == tool_id)
+        .ok_or_else(|| ApiError::not_found("MCP server tool", &tool_id))?;
+
+    tracing::info!(server_id = %server_id, tool_id = %tool_id, "Retrieved MCP server tool");
+
+    Ok(Json(tool))
+}
+
+/// Request body for running an MCP server tool
+#[derive(Debug, Deserialize)]
+pub struct RunToolRequest {
+    #[serde(default = "default_arguments")]
+    pub arguments: serde_json::Value,
+}
+
+fn default_arguments() -> serde_json::Value {
+    serde_json::json!({})
+}
+
+/// Execute a tool on an MCP server
+///
+/// POST /v1/mcp-servers/{server_id}/tools/{tool_id}/run
+#[instrument(skip(state, request), fields(server_id = %server_id, tool_id = %tool_id), level = "info")]
+async fn run_server_tool<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
+    Path((server_id, tool_id)): Path<(String, String)>,
+    Json(request): Json<RunToolRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Extract tool name from tool_id
+    // Tool ID format: mcp_{server_id}_{tool_name}
+    let tool_name = tool_id
+        .strip_prefix(&format!("mcp_{}_", server_id))
+        .ok_or_else(|| ApiError::bad_request(format!("Invalid tool ID format: {}", tool_id)))?;
+
+    // Execute the tool
+    let result = state
+        .execute_mcp_server_tool(&server_id, tool_name, request.arguments)
+        .await
+        .map_err(|e| match e {
+            kelpie_server::state::StateError::NotFound { resource, id } => {
+                ApiError::not_found(resource, &id)
+            }
+            _ => ApiError::internal(format!("Failed to execute MCP server tool: {}", e)),
+        })?;
+
+    tracing::info!(server_id = %server_id, tool_id = %tool_id, "Executed MCP server tool");
+
+    Ok(Json(result))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::router as api_router;
@@ -208,7 +373,7 @@ mod tests {
     use tower::ServiceExt;
 
     async fn test_app() -> Router {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::TokioRuntime);
         api_router(state)
     }
 

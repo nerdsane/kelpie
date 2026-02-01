@@ -5,12 +5,12 @@
 use crate::config::SandboxConfig;
 use crate::error::{SandboxError, SandboxResult};
 use crate::traits::{Sandbox, SandboxFactory, SandboxState};
+use kelpie_core::Runtime;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, Semaphore};
-use tokio::time::timeout;
 
 /// Default minimum pool size
 pub const POOL_SIZE_MIN_DEFAULT: usize = 2;
@@ -209,7 +209,10 @@ impl<F: SandboxFactory> SandboxPool<F> {
         }
 
         // No warm sandbox, try to create a new one
-        let permit = match timeout(timeout_duration, self.capacity.acquire()).await {
+        let permit = match kelpie_core::current_runtime()
+            .timeout(timeout_duration, self.capacity.acquire())
+            .await
+        {
             Ok(Ok(permit)) => permit,
             Ok(Err(_)) => {
                 // Semaphore closed - shouldn't happen
@@ -370,7 +373,9 @@ where
     fn drop(&mut self) {
         if let Some(sandbox) = self.sandbox.take() {
             let pool = Arc::clone(&self.pool);
-            tokio::spawn(async move {
+            // Spawn release task in background - we don't need to wait for completion in drop
+            #[allow(clippy::let_underscore_future)]
+            let _ = kelpie_core::current_runtime().spawn(async move {
                 pool.release(sandbox).await;
             });
         }
@@ -528,7 +533,9 @@ mod tests {
         }
 
         // Give the async release time to complete
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        kelpie_core::TokioRuntime
+            .sleep(Duration::from_millis(10))
+            .await;
 
         let stats = pool.stats().await;
         assert_eq!(stats.total_returned, 1);

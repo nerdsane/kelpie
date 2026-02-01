@@ -8,9 +8,13 @@
 //!
 //! DST Support: Works with SimTeleportStorage for fault injection testing.
 
-use crate::storage::{Architecture, SnapshotKind, TeleportPackage, TeleportStorage};
+use crate::actor::{AgentActorState, RegisterRequest};
+use crate::storage::{AgentMetadata, Architecture, SnapshotKind, TeleportPackage, TeleportStorage};
 use bytes::Bytes;
+use kelpie_core::actor::ActorId;
+use kelpie_core::io::{TimeProvider, WallClockTime};
 use kelpie_core::{Error, Result};
+use kelpie_runtime::DispatcherHandle;
 use kelpie_vm::{VmConfig, VmFactory, VmInstance, VmSnapshot, VmSnapshotMetadata};
 use std::sync::Arc;
 
@@ -27,6 +31,9 @@ where
     storage: Arc<S>,
     /// VM factory for creating VM instances
     vm_factory: Arc<F>,
+    /// Optional dispatcher for RegistryActor registration
+    /// If None, registration is skipped (backward compatible)
+    dispatcher: Option<DispatcherHandle<kelpie_core::TokioRuntime>>,
     /// Expected base image version
     base_image_version: String,
 }
@@ -36,13 +43,23 @@ where
     S: TeleportStorage,
     F: VmFactory,
 {
-    /// Create a new TeleportService
+    /// Create a new TeleportService without dispatcher (backward compatible)
     pub fn new(storage: Arc<S>, vm_factory: Arc<F>) -> Self {
         Self {
             storage,
             vm_factory,
+            dispatcher: None,
             base_image_version: "1.0.0".to_string(),
         }
+    }
+
+    /// Create TeleportService with dispatcher for RegistryActor registration
+    pub fn with_dispatcher(
+        mut self,
+        dispatcher: DispatcherHandle<kelpie_core::TokioRuntime>,
+    ) -> Self {
+        self.dispatcher = Some(dispatcher);
+        self
     }
 
     /// Set the expected base image version
@@ -92,10 +109,7 @@ where
 
         // Step 2: Build teleport package
         let package_id = format!("teleport-{}-{}", agent_id, uuid::Uuid::new_v4());
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        let now_ms = WallClockTime::new().now_ms();
 
         let mut package =
             TeleportPackage::new(package_id.clone(), agent_id, self.storage.host_arch(), kind)
@@ -225,6 +239,74 @@ where
 
         // Extract agent state
         let agent_state = package.agent_state.unwrap_or_default();
+
+        // Step 6: Register agent in global registry (Option 1: RegistryActor)
+        // Deserialize agent state to extract metadata and send message to RegistryActor
+        if !agent_state.is_empty() {
+            if let Some(ref dispatcher) = self.dispatcher {
+                match serde_json::from_slice::<AgentActorState>(&agent_state) {
+                    Ok(actor_state) => {
+                        if let Some(agent) = actor_state.agent {
+                            // Convert AgentState to AgentMetadata
+                            let metadata = AgentMetadata {
+                                id: agent.id.clone(),
+                                name: agent.name.clone(),
+                                agent_type: agent.agent_type.clone(),
+                                model: agent.model.clone(),
+                                embedding: agent.embedding.clone(),
+                                system: agent.system.clone(),
+                                description: agent.description.clone(),
+                                tool_ids: agent.tool_ids.clone(),
+                                tags: agent.tags.clone(),
+                                metadata: agent.metadata.clone(),
+                                created_at: agent.created_at,
+                                updated_at: agent.updated_at,
+                            };
+
+                            // Send register message to RegistryActor
+                            let registry_id = ActorId::new("system", "agent_registry")?;
+                            let request = RegisterRequest { metadata };
+                            let payload =
+                                serde_json::to_vec(&request).map_err(|e| Error::Internal {
+                                    message: format!("Failed to serialize RegisterRequest: {}", e),
+                                })?;
+
+                            match dispatcher
+                                .invoke(registry_id, "register".to_string(), Bytes::from(payload))
+                                .await
+                            {
+                                Ok(_) => {
+                                    tracing::info!(
+                                        agent_id = %agent.id,
+                                        "Agent registered via RegistryActor after teleport"
+                                    );
+                                }
+                                Err(e) => {
+                                    // Non-fatal: registration failure doesn't prevent teleport
+                                    tracing::warn!(
+                                        agent_id = %agent.id,
+                                        error = %e,
+                                        "Failed to register with RegistryActor (non-fatal)"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            package_id = %package_id,
+                            error = %e,
+                            "Failed to deserialize agent state for registration"
+                        );
+                    }
+                }
+            } else {
+                tracing::debug!(
+                    package_id = %package_id,
+                    "No dispatcher configured, skipping RegistryActor registration"
+                );
+            }
+        }
 
         tracing::info!(
             package_id = %package_id,

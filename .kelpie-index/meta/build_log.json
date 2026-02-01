@@ -1,0 +1,5 @@
+{
+  "version": "1.0.0",
+  "description": "Build log tracking when indexes were last built",
+  "builds": []
+}

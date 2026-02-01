@@ -137,8 +137,19 @@ impl From<CoreError> for MemoryError {
 
 impl From<MemoryError> for CoreError {
     fn from(err: MemoryError) -> Self {
-        CoreError::Internal {
-            message: err.to_string(),
+        match err {
+            MemoryError::BlockNotFound { block_id } => {
+                CoreError::not_found("memory_block", block_id)
+            }
+            MemoryError::KeyNotFound { key } => CoreError::not_found("working_memory_key", key),
+            MemoryError::InvalidConfig { reason } => CoreError::config(reason),
+            MemoryError::SerializationFailed { reason } => {
+                CoreError::SerializationFailed { reason }
+            }
+            MemoryError::DeserializationFailed { reason } => {
+                CoreError::DeserializationFailed { reason }
+            }
+            _ => CoreError::internal(err.to_string()),
         }
     }
 }

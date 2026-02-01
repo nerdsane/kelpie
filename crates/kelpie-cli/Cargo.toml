@@ -15,3 +15,26 @@ clap = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
+
+# HTTP client for API calls
+reqwest = { workspace = true, features = ["json", "stream"] }
+
+# JSON handling
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Streaming support
+futures = { workspace = true }
+tokio-stream = { workspace = true }
+
+# Interactive REPL
+rustyline = "13"
+
+# Terminal colors
+colored = "2.1"
+
+# User directories for config
+dirs = "5.0"
+
+# Time formatting
+chrono = { workspace = true }

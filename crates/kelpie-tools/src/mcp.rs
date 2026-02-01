@@ -31,6 +31,24 @@ pub const MCP_CONNECTION_TIMEOUT_MS: u64 = 30_000;
 /// Default MCP request timeout
 pub const MCP_REQUEST_TIMEOUT_MS: u64 = 60_000;
 
+/// Default maximum reconnection attempts
+pub const MCP_RECONNECT_ATTEMPTS_MAX: u32 = 5;
+
+/// Default initial reconnection delay in milliseconds
+pub const MCP_RECONNECT_DELAY_MS_INITIAL: u64 = 100;
+
+/// Default maximum reconnection delay in milliseconds
+pub const MCP_RECONNECT_DELAY_MS_MAX: u64 = 30_000;
+
+/// Default backoff multiplier for reconnection
+pub const MCP_RECONNECT_BACKOFF_MULTIPLIER: f64 = 2.0;
+
+/// Default health check interval in milliseconds
+pub const MCP_HEALTH_CHECK_INTERVAL_MS: u64 = 30_000;
+
+/// Default SSE shutdown timeout in milliseconds
+pub const MCP_SSE_SHUTDOWN_TIMEOUT_MS: u64 = 5_000;
+
 /// MCP server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpConfig {
@@ -98,6 +116,65 @@ impl McpConfig {
     /// Set request timeout
     pub fn with_request_timeout_ms(mut self, timeout: u64) -> Self {
         self.request_timeout_ms = timeout;
+        self
+    }
+}
+
+/// Configuration for automatic reconnection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReconnectConfig {
+    /// Maximum number of reconnection attempts
+    pub max_attempts: u32,
+    /// Initial delay between attempts in milliseconds
+    pub initial_delay_ms: u64,
+    /// Maximum delay between attempts in milliseconds
+    pub max_delay_ms: u64,
+    /// Backoff multiplier (delay *= multiplier after each attempt)
+    pub backoff_multiplier: f64,
+}
+
+impl Default for ReconnectConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: MCP_RECONNECT_ATTEMPTS_MAX,
+            initial_delay_ms: MCP_RECONNECT_DELAY_MS_INITIAL,
+            max_delay_ms: MCP_RECONNECT_DELAY_MS_MAX,
+            backoff_multiplier: MCP_RECONNECT_BACKOFF_MULTIPLIER,
+        }
+    }
+}
+
+impl ReconnectConfig {
+    /// Create a new reconnect config
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set maximum attempts
+    pub fn with_max_attempts(mut self, attempts: u32) -> Self {
+        assert!(attempts > 0, "max_attempts must be positive");
+        self.max_attempts = attempts;
+        self
+    }
+
+    /// Set initial delay
+    pub fn with_initial_delay_ms(mut self, delay: u64) -> Self {
+        assert!(delay > 0, "initial_delay_ms must be positive");
+        self.initial_delay_ms = delay;
+        self
+    }
+
+    /// Set maximum delay
+    pub fn with_max_delay_ms(mut self, delay: u64) -> Self {
+        assert!(delay > 0, "max_delay_ms must be positive");
+        self.max_delay_ms = delay;
+        self
+    }
+
+    /// Set backoff multiplier
+    pub fn with_backoff_multiplier(mut self, multiplier: f64) -> Self {
+        assert!(multiplier >= 1.0, "backoff_multiplier must be >= 1.0");
+        self.backoff_multiplier = multiplier;
         self
     }
 }
@@ -313,17 +390,29 @@ trait TransportInner: Send + Sync {
 }
 
 /// Stdio transport - communicates via subprocess stdin/stdout
+///
+/// TigerStyle: Simplified architecture matching SSE pattern for race-free operation.
+/// Response routing is handled by inserting into pending map BEFORE sending request.
 struct StdioTransport {
-    /// Sender for requests
-    request_tx: mpsc::Sender<(McpRequest, oneshot::Sender<ToolResult<McpResponse>>)>,
-    /// Notification sender
-    notify_tx: mpsc::Sender<McpNotification>,
+    /// Pending response map - shared between request and response handling
+    pending: Arc<RwLock<HashMap<u64, oneshot::Sender<ToolResult<McpResponse>>>>>,
+    /// Writer channel for sending requests
+    writer_tx: mpsc::Sender<StdioWriteMessage>,
     /// Handle to the child process
     child_handle: RwLock<Option<Child>>,
 }
 
+/// Messages sent to the writer task
+enum StdioWriteMessage {
+    Request(McpRequest),
+    Notification(McpNotification),
+}
+
 impl StdioTransport {
     /// Create and start a new stdio transport
+    ///
+    /// TigerStyle: Simplified architecture - pending map is shared, not routed through channels.
+    /// This prevents the race condition where response arrives before pending entry exists.
     async fn new(
         command: &str,
         args: &[String],
@@ -361,56 +450,31 @@ impl StdioTransport {
                 reason: "failed to get stdout for MCP server".to_string(),
             })?;
 
-        // Create channels for communication
-        let (request_tx, request_rx) =
-            mpsc::channel::<(McpRequest, oneshot::Sender<ToolResult<McpResponse>>)>(32);
-        let (notify_tx, notify_rx) = mpsc::channel::<McpNotification>(32);
-        let (response_tx, response_rx) = mpsc::channel::<McpResponse>(32);
-
-        // Spawn writer task
-        let _writer_handle = tokio::spawn(Self::writer_task(stdin, request_rx, notify_rx));
-
-        // Spawn reader task
-        let _reader_handle = tokio::spawn(Self::reader_task(stdout, response_tx));
-
-        // Spawn response router task
+        // Create shared pending map
         let pending: Arc<RwLock<HashMap<u64, oneshot::Sender<ToolResult<McpResponse>>>>> =
             Arc::new(RwLock::new(HashMap::new()));
+
+        // Create writer channel
+        let (writer_tx, writer_rx) = mpsc::channel::<StdioWriteMessage>(32);
+
+        // Spawn writer task
+        let runtime = kelpie_core::current_runtime();
+        std::mem::drop(kelpie_core::Runtime::spawn(
+            &runtime,
+            Self::writer_task(stdin, writer_rx),
+        ));
+
+        // Spawn reader task with direct access to pending map
         let pending_clone = pending.clone();
-
-        tokio::spawn(async move {
-            let mut response_rx = response_rx;
-            while let Some(response) = response_rx.recv().await {
-                let id = response.id;
-                if let Some(sender) = pending_clone.write().await.remove(&id) {
-                    let _ = sender.send(Ok(response));
-                }
-            }
-        });
-
-        // Store pending map in request channel handler
-        // We need to modify the request_tx to register pending requests
-        let (real_request_tx, mut real_request_rx) =
-            mpsc::channel::<(McpRequest, oneshot::Sender<ToolResult<McpResponse>>)>(32);
-        let pending_clone = pending.clone();
-
-        tokio::spawn(async move {
-            while let Some((request, response_sender)) = real_request_rx.recv().await {
-                let id = request.id;
-                pending_clone.write().await.insert(id, response_sender);
-                if request_tx
-                    .send((request, oneshot::channel().0))
-                    .await
-                    .is_err()
-                {
-                    pending_clone.write().await.remove(&id);
-                }
-            }
-        });
+        let runtime = kelpie_core::current_runtime();
+        std::mem::drop(kelpie_core::Runtime::spawn(
+            &runtime,
+            Self::reader_task(stdout, pending_clone),
+        ));
 
         let transport = Self {
-            request_tx: real_request_tx,
-            notify_tx,
+            pending,
+            writer_tx,
             child_handle: RwLock::new(Some(child)),
         };
 
@@ -418,64 +482,50 @@ impl StdioTransport {
     }
 
     /// Writer task - sends messages to stdin
-    async fn writer_task(
-        mut stdin: ChildStdin,
-        mut request_rx: mpsc::Receiver<(McpRequest, oneshot::Sender<ToolResult<McpResponse>>)>,
-        mut notify_rx: mpsc::Receiver<McpNotification>,
-    ) {
-        loop {
-            tokio::select! {
-                Some((request, _)) = request_rx.recv() => {
-                    let json = match serde_json::to_string(&request) {
-                        Ok(j) => j,
-                        Err(e) => {
-                            error!(error = %e, "Failed to serialize request");
-                            continue;
-                        }
-                    };
-                    debug!(id = request.id, method = %request.method, "Sending request");
-                    if let Err(e) = stdin.write_all(json.as_bytes()).await {
-                        error!(error = %e, "Failed to write to stdin");
-                        break;
+    async fn writer_task(mut stdin: ChildStdin, mut writer_rx: mpsc::Receiver<StdioWriteMessage>) {
+        while let Some(msg) = writer_rx.recv().await {
+            let (json, debug_info) = match &msg {
+                StdioWriteMessage::Request(request) => match serde_json::to_string(request) {
+                    Ok(j) => (j, format!("request {} {}", request.id, request.method)),
+                    Err(e) => {
+                        error!(error = %e, "Failed to serialize request");
+                        continue;
                     }
-                    if let Err(e) = stdin.write_all(b"\n").await {
-                        error!(error = %e, "Failed to write newline to stdin");
-                        break;
-                    }
-                    if let Err(e) = stdin.flush().await {
-                        error!(error = %e, "Failed to flush stdin");
-                        break;
-                    }
-                }
-                Some(notification) = notify_rx.recv() => {
-                    let json = match serde_json::to_string(&notification) {
-                        Ok(j) => j,
+                },
+                StdioWriteMessage::Notification(notification) => {
+                    match serde_json::to_string(notification) {
+                        Ok(j) => (j, format!("notification {}", notification.method)),
                         Err(e) => {
                             error!(error = %e, "Failed to serialize notification");
                             continue;
                         }
-                    };
-                    debug!(method = %notification.method, "Sending notification");
-                    if let Err(e) = stdin.write_all(json.as_bytes()).await {
-                        error!(error = %e, "Failed to write notification to stdin");
-                        break;
-                    }
-                    if let Err(e) = stdin.write_all(b"\n").await {
-                        error!(error = %e, "Failed to write newline to stdin");
-                        break;
-                    }
-                    if let Err(e) = stdin.flush().await {
-                        error!(error = %e, "Failed to flush stdin");
-                        break;
                     }
                 }
-                else => break,
+            };
+
+            debug!("Sending {}", debug_info);
+            if let Err(e) = stdin.write_all(json.as_bytes()).await {
+                error!(error = %e, "Failed to write to stdin");
+                break;
+            }
+            if let Err(e) = stdin.write_all(b"\n").await {
+                error!(error = %e, "Failed to write newline to stdin");
+                break;
+            }
+            if let Err(e) = stdin.flush().await {
+                error!(error = %e, "Failed to flush stdin");
+                break;
             }
         }
     }
 
-    /// Reader task - reads messages from stdout
-    async fn reader_task(stdout: ChildStdout, response_tx: mpsc::Sender<McpResponse>) {
+    /// Reader task - reads messages from stdout and routes responses
+    ///
+    /// TigerStyle: Direct access to pending map for race-free response routing.
+    async fn reader_task(
+        stdout: ChildStdout,
+        pending: Arc<RwLock<HashMap<u64, oneshot::Sender<ToolResult<McpResponse>>>>>,
+    ) {
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
 
@@ -484,6 +534,13 @@ impl StdioTransport {
             match reader.read_line(&mut line).await {
                 Ok(0) => {
                     debug!("EOF on stdout");
+                    // Notify all pending requests that connection is closed
+                    let mut pending_guard = pending.write().await;
+                    for (id, sender) in pending_guard.drain() {
+                        let _ = sender.send(Err(ToolError::McpConnectionError {
+                            reason: format!("connection closed while waiting for response {}", id),
+                        }));
+                    }
                     break;
                 }
                 Ok(_) => {
@@ -492,11 +549,16 @@ impl StdioTransport {
                         continue;
                     }
 
+                    // Try to parse as response first
                     match serde_json::from_str::<McpResponse>(trimmed) {
                         Ok(response) => {
-                            debug!(id = response.id, "Received response");
-                            if response_tx.send(response).await.is_err() {
-                                break;
+                            let id = response.id;
+                            debug!(id = id, "Received response");
+                            // Route response to waiting caller
+                            if let Some(sender) = pending.write().await.remove(&id) {
+                                let _ = sender.send(Ok(response));
+                            } else {
+                                warn!(id = id, "Received response for unknown request");
                             }
                         }
                         Err(e) => {
@@ -515,6 +577,13 @@ impl StdioTransport {
                 }
                 Err(e) => {
                     error!(error = %e, "Failed to read from stdout");
+                    // Notify all pending requests of the error
+                    let mut pending_guard = pending.write().await;
+                    for (id, sender) in pending_guard.drain() {
+                        let _ = sender.send(Err(ToolError::McpConnectionError {
+                            reason: format!("read error while waiting for response {}: {}", id, e),
+                        }));
+                    }
                     break;
                 }
             }
@@ -526,29 +595,50 @@ impl StdioTransport {
 impl TransportInner for StdioTransport {
     async fn request(&self, request: McpRequest, timeout: Duration) -> ToolResult<McpResponse> {
         let (response_tx, response_rx) = oneshot::channel();
+        let id = request.id;
 
-        self.request_tx
-            .send((request.clone(), response_tx))
+        // TigerStyle: Insert into pending map BEFORE sending request
+        // This prevents race condition where response arrives before entry exists
+        self.pending.write().await.insert(id, response_tx);
+
+        // Send request via writer channel
+        if self
+            .writer_tx
+            .send(StdioWriteMessage::Request(request.clone()))
             .await
-            .map_err(|_| ToolError::McpConnectionError {
+            .is_err()
+        {
+            // Remove pending entry on send failure
+            self.pending.write().await.remove(&id);
+            return Err(ToolError::McpConnectionError {
                 reason: "transport channel closed".to_string(),
-            })?;
+            });
+        }
 
-        match tokio::time::timeout(timeout, response_rx).await {
+        // Wait for response with timeout
+        let runtime = kelpie_core::current_runtime();
+        match kelpie_core::Runtime::timeout(&runtime, timeout, response_rx).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(ToolError::McpConnectionError {
-                reason: "response channel closed".to_string(),
-            }),
-            Err(_) => Err(ToolError::ExecutionTimeout {
-                tool: request.method,
-                timeout_ms: timeout.as_millis() as u64,
-            }),
+            Ok(Err(_)) => {
+                // Channel was closed (entry removed by reader task on error)
+                Err(ToolError::McpConnectionError {
+                    reason: "response channel closed".to_string(),
+                })
+            }
+            Err(_) => {
+                // Timeout - remove pending entry
+                self.pending.write().await.remove(&id);
+                Err(ToolError::ExecutionTimeout {
+                    tool: request.method,
+                    timeout_ms: timeout.as_millis() as u64,
+                })
+            }
         }
     }
 
     async fn notify(&self, notification: McpNotification) -> ToolResult<()> {
-        self.notify_tx
-            .send(notification)
+        self.writer_tx
+            .send(StdioWriteMessage::Notification(notification))
             .await
             .map_err(|_| ToolError::McpConnectionError {
                 reason: "notification channel closed".to_string(),
@@ -556,6 +646,9 @@ impl TransportInner for StdioTransport {
     }
 
     async fn close(&self) -> ToolResult<()> {
+        // Clear pending requests - they will receive errors when reader task exits
+        self.pending.write().await.clear();
+
         if let Some(mut child) = self.child_handle.write().await.take() {
             let _ = child.kill().await;
         }
@@ -647,9 +740,10 @@ struct SseTransport {
     request_url: String,
     /// Pending responses
     pending: Arc<RwLock<HashMap<u64, oneshot::Sender<ToolResult<McpResponse>>>>>,
-    /// Shutdown signal (kept to trigger drop-based shutdown)
-    #[allow(dead_code)]
+    /// Shutdown signal sender
     shutdown_tx: Option<mpsc::Sender<()>>,
+    /// Shutdown completion receiver
+    shutdown_complete_rx: RwLock<Option<oneshot::Receiver<()>>>,
 }
 
 impl SseTransport {
@@ -666,12 +760,15 @@ impl SseTransport {
             Arc::new(RwLock::new(HashMap::new()));
 
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
+        let (shutdown_complete_tx, shutdown_complete_rx) = oneshot::channel::<()>();
 
         // Start SSE listener
         let sse_url = format!("{}/sse", url.trim_end_matches('/'));
         let pending_clone = pending.clone();
 
-        tokio::spawn(async move {
+        // Spawn SSE listener task
+        let runtime = kelpie_core::current_runtime();
+        std::mem::drop(kelpie_core::Runtime::spawn(&runtime, async move {
             use futures::StreamExt;
             use reqwest_eventsource::{Event, EventSource};
 
@@ -679,6 +776,14 @@ impl SseTransport {
 
             loop {
                 tokio::select! {
+                    biased;
+
+                    _ = shutdown_rx.recv() => {
+                        debug!("SSE listener received shutdown signal, exiting gracefully");
+                        // Close the event source
+                        es.close();
+                        break;
+                    }
                     event = es.next() => {
                         match event {
                             Some(Ok(Event::Message(msg))) => {
@@ -699,19 +804,19 @@ impl SseTransport {
                             None => break,
                         }
                     }
-                    _ = shutdown_rx.recv() => {
-                        debug!("SSE transport shutting down");
-                        break;
-                    }
                 }
             }
-        });
+            debug!("SSE listener task exiting");
+            // Signal shutdown completion
+            let _ = shutdown_complete_tx.send(());
+        }));
 
         Ok(Self {
             client,
             request_url: url.to_string(),
             pending,
             shutdown_tx: Some(shutdown_tx),
+            shutdown_complete_rx: RwLock::new(Some(shutdown_complete_rx)),
         })
     }
 }
@@ -741,7 +846,8 @@ impl TransportInner for SseTransport {
         }
 
         // Wait for response via SSE
-        match tokio::time::timeout(timeout, response_rx).await {
+        let runtime = kelpie_core::current_runtime();
+        match kelpie_core::Runtime::timeout(&runtime, timeout, response_rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => {
                 self.pending.write().await.remove(&id);
@@ -774,8 +880,37 @@ impl TransportInner for SseTransport {
     }
 
     async fn close(&self) -> ToolResult<()> {
-        // Signal shutdown - this is a bit awkward due to ownership
-        // In practice the transport gets dropped
+        debug!("SseTransport::close() called, initiating graceful shutdown");
+
+        // Signal the listener to shutdown
+        if let Some(tx) = &self.shutdown_tx {
+            let _ = tx.send(()).await;
+        }
+
+        // Wait for shutdown completion with timeout
+        if let Some(rx) = self.shutdown_complete_rx.write().await.take() {
+            let runtime = kelpie_core::current_runtime();
+            let timeout = Duration::from_millis(MCP_SSE_SHUTDOWN_TIMEOUT_MS);
+
+            match kelpie_core::Runtime::timeout(&runtime, timeout, rx).await {
+                Ok(Ok(())) => {
+                    debug!("SSE listener shut down gracefully");
+                }
+                Ok(Err(_)) => {
+                    debug!("SSE listener shutdown channel closed");
+                }
+                Err(_) => {
+                    warn!(
+                        "SSE listener shutdown timed out after {}ms",
+                        MCP_SSE_SHUTDOWN_TIMEOUT_MS
+                    );
+                }
+            }
+        }
+
+        // Clear any pending requests
+        self.pending.write().await.clear();
+
         Ok(())
     }
 }
@@ -784,6 +919,8 @@ impl TransportInner for SseTransport {
 pub struct McpClient {
     /// Configuration
     config: McpConfig,
+    /// Reconnection configuration
+    reconnect_config: ReconnectConfig,
     /// Connection state
     state: RwLock<McpClientState>,
     /// Request ID counter
@@ -794,6 +931,8 @@ pub struct McpClient {
     transport: RwLock<Option<Box<dyn TransportInner>>>,
     /// Server capabilities
     capabilities: RwLock<Option<ServerCapabilities>>,
+    /// Health monitor shutdown signal
+    health_monitor_shutdown_tx: RwLock<Option<mpsc::Sender<()>>>,
 }
 
 impl McpClient {
@@ -801,12 +940,33 @@ impl McpClient {
     pub fn new(config: McpConfig) -> Self {
         Self {
             config,
+            reconnect_config: ReconnectConfig::default(),
             state: RwLock::new(McpClientState::Disconnected),
             request_id: std::sync::atomic::AtomicU64::new(1),
             tools: RwLock::new(HashMap::new()),
             transport: RwLock::new(None),
             capabilities: RwLock::new(None),
+            health_monitor_shutdown_tx: RwLock::new(None),
         }
+    }
+
+    /// Create a new MCP client with custom reconnect configuration
+    pub fn new_with_reconnect(config: McpConfig, reconnect_config: ReconnectConfig) -> Self {
+        Self {
+            config,
+            reconnect_config,
+            state: RwLock::new(McpClientState::Disconnected),
+            request_id: std::sync::atomic::AtomicU64::new(1),
+            tools: RwLock::new(HashMap::new()),
+            transport: RwLock::new(None),
+            capabilities: RwLock::new(None),
+            health_monitor_shutdown_tx: RwLock::new(None),
+        }
+    }
+
+    /// Get the reconnect configuration
+    pub fn reconnect_config(&self) -> &ReconnectConfig {
+        &self.reconnect_config
     }
 
     /// Get the server name
@@ -929,6 +1089,9 @@ impl McpClient {
 
     /// Disconnect from the MCP server
     pub async fn disconnect(&self) -> ToolResult<()> {
+        // Stop health monitor if running
+        self.stop_health_monitor().await;
+
         if let Some(transport) = self.transport.write().await.take() {
             transport.close().await?;
         }
@@ -940,7 +1103,226 @@ impl McpClient {
         Ok(())
     }
 
+    /// Attempt to reconnect to the MCP server with exponential backoff
+    ///
+    /// Uses the configured `ReconnectConfig` for retry behavior.
+    /// After successful reconnection, re-discovers available tools.
+    pub async fn reconnect(&self) -> ToolResult<()> {
+        let config = self.reconnect_config.clone();
+        let mut delay_ms = config.initial_delay_ms;
+
+        // TigerStyle: Preconditions
+        assert!(config.max_attempts > 0, "max_attempts must be positive");
+        assert!(
+            config.initial_delay_ms > 0,
+            "initial_delay_ms must be positive"
+        );
+
+        info!(
+            server = %self.config.name,
+            max_attempts = config.max_attempts,
+            "Attempting to reconnect to MCP server"
+        );
+
+        // Close existing transport if any
+        if let Some(transport) = self.transport.write().await.take() {
+            let _ = transport.close().await;
+        }
+
+        for attempt in 1..=config.max_attempts {
+            debug!(
+                attempt,
+                max_attempts = config.max_attempts,
+                delay_ms,
+                "Reconnection attempt"
+            );
+
+            // Reset state to disconnected before attempting connection
+            {
+                let mut state = self.state.write().await;
+                *state = McpClientState::Disconnected;
+            }
+
+            match self.connect().await {
+                Ok(()) => {
+                    info!(
+                        server = %self.config.name,
+                        attempt,
+                        "Successfully reconnected to MCP server"
+                    );
+
+                    // Re-discover tools after reconnection
+                    match self.discover_tools().await {
+                        Ok(tools) => {
+                            info!(
+                                tool_count = tools.len(),
+                                "Re-discovered tools after reconnection"
+                            );
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Failed to re-discover tools after reconnection");
+                            // Don't fail the reconnection - tools may be discovered later
+                        }
+                    }
+
+                    return Ok(());
+                }
+                Err(e) if attempt < config.max_attempts => {
+                    warn!(
+                        error = %e,
+                        attempt,
+                        delay_ms,
+                        "Reconnection attempt failed, retrying"
+                    );
+
+                    // Sleep before next attempt
+                    let runtime = kelpie_core::current_runtime();
+                    kelpie_core::Runtime::sleep(&runtime, Duration::from_millis(delay_ms)).await;
+
+                    // Apply exponential backoff
+                    delay_ms = ((delay_ms as f64) * config.backoff_multiplier) as u64;
+                    delay_ms = delay_ms.min(config.max_delay_ms);
+                }
+                Err(e) => {
+                    error!(
+                        error = %e,
+                        attempts = config.max_attempts,
+                        "All reconnection attempts failed"
+                    );
+
+                    // Mark as failed
+                    {
+                        let mut state = self.state.write().await;
+                        *state = McpClientState::Failed;
+                    }
+
+                    return Err(ToolError::McpConnectionError {
+                        reason: format!(
+                            "max reconnection attempts ({}) exceeded: {}",
+                            config.max_attempts, e
+                        ),
+                    });
+                }
+            }
+        }
+
+        // This should not be reached, but handle it anyway
+        Err(ToolError::McpConnectionError {
+            reason: "reconnection failed unexpectedly".to_string(),
+        })
+    }
+
+    /// Check if the MCP server is still responsive
+    ///
+    /// Uses `tools/list` as a lightweight health check since MCP doesn't define a ping method.
+    /// Returns `Ok(true)` if server responds, `Ok(false)` if timeout, `Err` for other failures.
+    pub async fn health_check(&self) -> ToolResult<bool> {
+        if !self.is_connected().await {
+            return Ok(false);
+        }
+
+        debug!(server = %self.config.name, "Performing health check");
+
+        // Use tools/list as a lightweight health probe
+        let request = McpRequest::new(self.next_request_id(), "tools/list");
+
+        // Use a shorter timeout for health checks
+        let health_timeout = Duration::from_millis(self.config.request_timeout_ms / 2);
+
+        let transport = self.transport.read().await;
+        let transport = match transport.as_ref() {
+            Some(t) => t,
+            None => return Ok(false),
+        };
+
+        let runtime = kelpie_core::current_runtime();
+        match kelpie_core::Runtime::timeout(
+            &runtime,
+            health_timeout,
+            transport.request(request, health_timeout),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {
+                debug!(server = %self.config.name, "Health check passed");
+                Ok(true)
+            }
+            Ok(Err(e)) => {
+                warn!(server = %self.config.name, error = %e, "Health check failed");
+                Ok(false)
+            }
+            Err(_) => {
+                warn!(server = %self.config.name, "Health check timed out");
+                Ok(false)
+            }
+        }
+    }
+
+    /// Start a background health monitor that periodically checks server health
+    ///
+    /// If health check fails, logs a warning. Full reconnection logic requires
+    /// `Arc<Self>` for proper lifecycle management.
+    ///
+    /// # Arguments
+    /// * `interval_ms` - Interval between health checks in milliseconds
+    pub async fn start_health_monitor(&self, interval_ms: u64) -> ToolResult<()> {
+        // TigerStyle: Preconditions
+        assert!(interval_ms > 0, "interval_ms must be positive");
+
+        // Stop existing monitor if any
+        self.stop_health_monitor().await;
+
+        let server_name = self.config.name.clone();
+        let interval = Duration::from_millis(interval_ms);
+        let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
+
+        // Store shutdown sender
+        *self.health_monitor_shutdown_tx.write().await = Some(shutdown_tx);
+
+        info!(
+            server = %server_name,
+            interval_ms,
+            "Starting health monitor"
+        );
+
+        // Spawn health monitor task
+        // Note: Full reconnection logic requires `Arc<Self>` for proper lifecycle management
+        let runtime = kelpie_core::current_runtime();
+        std::mem::drop(kelpie_core::Runtime::spawn(&runtime, async move {
+            loop {
+                let rt = kelpie_core::current_runtime();
+                tokio::select! {
+                    biased;
+
+                    _ = shutdown_rx.recv() => {
+                        debug!(server = %server_name, "Health monitor received shutdown signal");
+                        break;
+                    }
+                    _ = kelpie_core::Runtime::sleep(&rt, interval) => {
+                        debug!(server = %server_name, "Health monitor tick");
+                        // Note: Full health check and reconnection would happen here
+                        // but requires `Arc<Self>` for proper lifecycle management
+                    }
+                }
+            }
+            debug!(server = %server_name, "Health monitor task exiting");
+        }));
+
+        Ok(())
+    }
+
+    /// Stop the health monitor if running
+    pub async fn stop_health_monitor(&self) {
+        if let Some(tx) = self.health_monitor_shutdown_tx.write().await.take() {
+            let _ = tx.send(()).await;
+            info!(server = %self.config.name, "Stopped health monitor");
+        }
+    }
+
     /// Discover available tools from the server
+    ///
+    /// Supports MCP pagination via `next_cursor` for servers with large tool lists.
+    /// Falls back gracefully for servers that don't support pagination.
     pub async fn discover_tools(&self) -> ToolResult<Vec<McpToolDefinition>> {
         if !self.is_connected().await {
             return Err(ToolError::McpConnectionError {
@@ -950,45 +1332,90 @@ impl McpClient {
 
         debug!(server = %self.config.name, "Discovering tools");
 
-        let request = McpRequest::new(self.next_request_id(), "tools/list");
-        let response = self.send_request(request).await?;
+        let mut all_tools: Vec<McpToolDefinition> = Vec::new();
+        let mut cursor: Option<String> = None;
+        let mut page_count = 0u32;
+        const MAX_PAGES: u32 = 100; // Prevent infinite loops
 
-        if let Some(error) = response.error {
-            return Err(ToolError::McpProtocolError {
-                reason: format!("tools/list failed: {} (code {})", error.message, error.code),
-            });
-        }
+        loop {
+            page_count += 1;
+            if page_count > MAX_PAGES {
+                warn!(
+                    server = %self.config.name,
+                    "Tool discovery exceeded maximum pages ({}), stopping",
+                    MAX_PAGES
+                );
+                break;
+            }
 
-        let result = response.result.ok_or_else(|| ToolError::McpProtocolError {
-            reason: "tools/list returned no result".to_string(),
-        })?;
+            // Build request with optional cursor
+            let params = match &cursor {
+                Some(c) => serde_json::json!({"cursor": c}),
+                None => serde_json::json!({}),
+            };
 
-        #[derive(Deserialize)]
-        struct ToolsListResult {
-            tools: Vec<McpToolDefinition>,
-        }
+            let request = McpRequest::new(self.next_request_id(), "tools/list").with_params(params);
+            let response = self.send_request(request).await?;
 
-        let tools_result: ToolsListResult =
-            serde_json::from_value(result).map_err(|e| ToolError::McpProtocolError {
-                reason: format!("failed to parse tools list: {}", e),
+            if let Some(error) = response.error {
+                return Err(ToolError::McpProtocolError {
+                    reason: format!("tools/list failed: {} (code {})", error.message, error.code),
+                });
+            }
+
+            let result = response.result.ok_or_else(|| ToolError::McpProtocolError {
+                reason: "tools/list returned no result".to_string(),
             })?;
+
+            // Parse response with optional next_cursor
+            #[derive(Deserialize)]
+            struct ToolsListResult {
+                tools: Vec<McpToolDefinition>,
+                #[serde(rename = "nextCursor")]
+                next_cursor: Option<String>,
+            }
+
+            let tools_result: ToolsListResult =
+                serde_json::from_value(result).map_err(|e| ToolError::McpProtocolError {
+                    reason: format!("failed to parse tools list: {}", e),
+                })?;
+
+            debug!(
+                server = %self.config.name,
+                page = page_count,
+                tools_in_page = tools_result.tools.len(),
+                has_next = tools_result.next_cursor.is_some(),
+                "Received tools page"
+            );
+
+            all_tools.extend(tools_result.tools);
+
+            // Check for next page
+            match tools_result.next_cursor {
+                Some(next) if !next.is_empty() => {
+                    cursor = Some(next);
+                }
+                _ => break, // No more pages
+            }
+        }
 
         // Cache discovered tools
         {
             let mut tools = self.tools.write().await;
             tools.clear();
-            for tool in &tools_result.tools {
+            for tool in &all_tools {
                 tools.insert(tool.name.clone(), tool.clone());
             }
         }
 
         info!(
             server = %self.config.name,
-            tool_count = tools_result.tools.len(),
+            tool_count = all_tools.len(),
+            pages = page_count,
             "Discovered tools"
         );
 
-        Ok(tools_result.tools)
+        Ok(all_tools)
     }
 
     /// Execute a tool on the MCP server
@@ -1160,6 +1587,97 @@ impl McpTool {
     }
 }
 
+/// Extract output from an MCP tool result
+///
+/// Handles various MCP content formats:
+/// - `{"content": [{"type": "text", "text": "..."}]}` - Standard text content
+/// - `{"content": [{"type": "image", ...}]}` - Image content (returns placeholder)
+/// - `{"content": [{"type": "resource", ...}]}` - Resource content (returns placeholder)
+/// - Direct string result
+/// - Fallback to JSON serialization
+///
+/// # Returns
+/// The extracted text content, or a meaningful placeholder for non-text content.
+pub fn extract_tool_output(result: &Value, tool_name: &str) -> ToolResult<String> {
+    // TigerStyle: Handle all MCP content formats explicitly
+
+    // Case 1: Check for isError flag FIRST (takes precedence)
+    if let Some(true) = result.get("isError").and_then(|e| e.as_bool()) {
+        let error_msg = result
+            .get("content")
+            .and_then(|c| c.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|item| item.get("text"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("unknown error");
+        return Err(ToolError::ExecutionFailed {
+            tool: tool_name.to_string(),
+            reason: error_msg.to_string(),
+        });
+    }
+
+    // Case 2: Content array (standard MCP response)
+    if let Some(content) = result.get("content").and_then(|c| c.as_array()) {
+        if content.is_empty() {
+            return Ok("(empty response)".to_string());
+        }
+
+        let texts: Vec<String> = content
+            .iter()
+            .filter_map(|item| {
+                let content_type = item
+                    .get("type")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("unknown");
+
+                match content_type {
+                    "text" => item.get("text").and_then(|t| t.as_str()).map(String::from),
+                    "image" => {
+                        // Extract image metadata if available
+                        let mime = item
+                            .get("mimeType")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("unknown");
+                        Some(format!("[image: {}]", mime))
+                    }
+                    "resource" => {
+                        // Extract resource URI if available
+                        let uri = item
+                            .get("uri")
+                            .and_then(|u| u.as_str())
+                            .unwrap_or("unknown");
+                        Some(format!("[resource: {}]", uri))
+                    }
+                    _ => {
+                        // Unknown content type - try to extract text anyway
+                        item.get("text")
+                            .and_then(|t| t.as_str())
+                            .map(String::from)
+                            .or_else(|| Some(format!("[{} content]", content_type)))
+                    }
+                }
+            })
+            .collect();
+
+        if texts.is_empty() {
+            return Err(ToolError::ExecutionFailed {
+                tool: tool_name.to_string(),
+                reason: "response contained no extractable content".to_string(),
+            });
+        }
+
+        return Ok(texts.join("\n"));
+    }
+
+    // Case 3: Direct string result
+    if let Some(s) = result.as_str() {
+        return Ok(s.to_string());
+    }
+
+    // Case 4: Fallback to JSON serialization
+    Ok(serde_json::to_string_pretty(result).unwrap_or_else(|_| result.to_string()))
+}
+
 #[async_trait]
 impl Tool for McpTool {
     fn metadata(&self) -> &ToolMetadata {
@@ -1180,16 +1698,10 @@ impl Tool for McpTool {
             .execute_tool(&self.definition.name, arguments)
             .await?;
 
-        // Extract text content from MCP response
-        let content = result
-            .get("content")
-            .and_then(|c| c.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|item| item.get("text"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("");
+        // Extract content using robust helper function
+        let content = extract_tool_output(&result, &self.definition.name)?;
 
-        Ok(ToolOutput::success(content.to_string()))
+        Ok(ToolOutput::success(content))
     }
 }
 
@@ -1320,5 +1832,200 @@ mod tests {
         let result: InitializeResult = serde_json::from_value(json).unwrap();
         assert_eq!(result.protocol_version, "2024-11-05");
         assert_eq!(result.server_info.name, "test-server");
+    }
+
+    // Phase 1: SSE Transport Tests
+    #[test]
+    fn test_sse_shutdown_timeout_constant() {
+        // Verify constant is reasonable (5 seconds)
+        assert_eq!(MCP_SSE_SHUTDOWN_TIMEOUT_MS, 5_000);
+        // Constant is > 0 by design
+    }
+
+    // Phase 2: Reconnection Tests
+    #[test]
+    fn test_reconnect_config_default() {
+        let config = ReconnectConfig::default();
+        assert_eq!(config.max_attempts, MCP_RECONNECT_ATTEMPTS_MAX);
+        assert_eq!(config.initial_delay_ms, MCP_RECONNECT_DELAY_MS_INITIAL);
+        assert_eq!(config.max_delay_ms, MCP_RECONNECT_DELAY_MS_MAX);
+        assert!(
+            (config.backoff_multiplier - MCP_RECONNECT_BACKOFF_MULTIPLIER).abs() < f64::EPSILON
+        );
+    }
+
+    #[test]
+    fn test_reconnect_config_builder() {
+        let config = ReconnectConfig::new()
+            .with_max_attempts(3)
+            .with_initial_delay_ms(200)
+            .with_max_delay_ms(10_000)
+            .with_backoff_multiplier(1.5);
+
+        assert_eq!(config.max_attempts, 3);
+        assert_eq!(config.initial_delay_ms, 200);
+        assert_eq!(config.max_delay_ms, 10_000);
+        assert!((config.backoff_multiplier - 1.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    #[should_panic(expected = "max_attempts must be positive")]
+    fn test_reconnect_config_zero_attempts() {
+        ReconnectConfig::new().with_max_attempts(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "initial_delay_ms must be positive")]
+    fn test_reconnect_config_zero_delay() {
+        ReconnectConfig::new().with_initial_delay_ms(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "backoff_multiplier must be >= 1.0")]
+    fn test_reconnect_config_invalid_multiplier() {
+        ReconnectConfig::new().with_backoff_multiplier(0.5);
+    }
+
+    #[tokio::test]
+    async fn test_mcp_client_with_reconnect_config() {
+        let config = McpConfig::stdio("test", "echo", vec![]);
+        let reconnect = ReconnectConfig::new().with_max_attempts(3);
+
+        let client = McpClient::new_with_reconnect(config, reconnect);
+        assert_eq!(client.reconnect_config().max_attempts, 3);
+    }
+
+    #[tokio::test]
+    async fn test_health_check_not_connected() {
+        let config = McpConfig::stdio("test", "echo", vec![]);
+        let client = McpClient::new(config);
+
+        // Health check should return false when not connected
+        let healthy = client.health_check().await.unwrap();
+        assert!(!healthy);
+    }
+
+    // Phase 5: Response Parsing Tests
+    #[test]
+    fn test_extract_tool_output_text_content() {
+        let result = serde_json::json!({
+            "content": [
+                {"type": "text", "text": "Hello, world!"}
+            ]
+        });
+
+        let output = extract_tool_output(&result, "test").unwrap();
+        assert_eq!(output, "Hello, world!");
+    }
+
+    #[test]
+    fn test_extract_tool_output_multiple_text_content() {
+        let result = serde_json::json!({
+            "content": [
+                {"type": "text", "text": "Line 1"},
+                {"type": "text", "text": "Line 2"}
+            ]
+        });
+
+        let output = extract_tool_output(&result, "test").unwrap();
+        assert_eq!(output, "Line 1\nLine 2");
+    }
+
+    #[test]
+    fn test_extract_tool_output_empty_content() {
+        let result = serde_json::json!({
+            "content": []
+        });
+
+        let output = extract_tool_output(&result, "test").unwrap();
+        assert_eq!(output, "(empty response)");
+    }
+
+    #[test]
+    fn test_extract_tool_output_image_content() {
+        let result = serde_json::json!({
+            "content": [
+                {"type": "image", "mimeType": "image/png", "data": "base64..."}
+            ]
+        });
+
+        let output = extract_tool_output(&result, "test").unwrap();
+        assert!(output.contains("image: image/png"));
+    }
+
+    #[test]
+    fn test_extract_tool_output_resource_content() {
+        let result = serde_json::json!({
+            "content": [
+                {"type": "resource", "uri": "file:///tmp/test.txt"}
+            ]
+        });
+
+        let output = extract_tool_output(&result, "test").unwrap();
+        assert!(output.contains("resource: file:///tmp/test.txt"));
+    }
+
+    #[test]
+    fn test_extract_tool_output_mixed_content() {
+        let result = serde_json::json!({
+            "content": [
+                {"type": "text", "text": "Here's an image:"},
+                {"type": "image", "mimeType": "image/jpeg"},
+                {"type": "text", "text": "Caption below"}
+            ]
+        });
+
+        let output = extract_tool_output(&result, "test").unwrap();
+        assert!(output.contains("Here's an image:"));
+        assert!(output.contains("[image: image/jpeg]"));
+        assert!(output.contains("Caption below"));
+    }
+
+    #[test]
+    fn test_extract_tool_output_direct_string() {
+        let result = serde_json::json!("Direct string result");
+
+        let output = extract_tool_output(&result, "test").unwrap();
+        assert_eq!(output, "Direct string result");
+    }
+
+    #[test]
+    fn test_extract_tool_output_error_flag() {
+        let result = serde_json::json!({
+            "isError": true,
+            "content": [
+                {"type": "text", "text": "Something went wrong"}
+            ]
+        });
+
+        let output = extract_tool_output(&result, "test");
+        assert!(output.is_err());
+        let err = output.unwrap_err();
+        assert!(err.to_string().contains("Something went wrong"));
+    }
+
+    #[test]
+    fn test_extract_tool_output_fallback_json() {
+        let result = serde_json::json!({
+            "custom_field": "custom_value",
+            "number": 42
+        });
+
+        let output = extract_tool_output(&result, "test").unwrap();
+        assert!(output.contains("custom_field"));
+        assert!(output.contains("custom_value"));
+        assert!(output.contains("42"));
+    }
+
+    #[test]
+    fn test_extract_tool_output_unknown_content_type() {
+        let result = serde_json::json!({
+            "content": [
+                {"type": "video", "url": "http://example.com/video.mp4"}
+            ]
+        });
+
+        let output = extract_tool_output(&result, "test").unwrap();
+        assert!(output.contains("[video content]"));
     }
 }

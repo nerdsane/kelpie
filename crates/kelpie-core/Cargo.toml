@@ -11,6 +11,7 @@ authors.workspace = true
 [dependencies]
 bytes = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
@@ -28,9 +29,16 @@ tracing-subscriber = { workspace = true, optional = true }
 prometheus = { workspace = true, optional = true }
 once_cell = { workspace = true, optional = true }
 
+# Madsim (optional, enabled with "madsim" feature for deterministic testing)
+madsim = { version = "0.2", optional = true }
+
 [features]
 default = []
 otel = ["opentelemetry", "opentelemetry-otlp", "opentelemetry_sdk", "opentelemetry-prometheus", "prometheus", "tracing-opentelemetry", "tracing-subscriber", "once_cell"]
+madsim = ["dep:madsim"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(madsim)'] }
 
 [dev-dependencies]
 proptest = { workspace = true }

@@ -9,6 +9,7 @@ use crate::tools::{
     BuiltinToolHandler, UnifiedToolRegistry, HEARTBEAT_PAUSE_MINUTES_DEFAULT,
     HEARTBEAT_PAUSE_MINUTES_MAX, HEARTBEAT_PAUSE_MINUTES_MIN, MS_PER_MINUTE,
 };
+use kelpie_core::io::{TimeProvider, WallClockTime};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -32,10 +33,7 @@ impl ClockSource {
     /// Get current time in milliseconds since epoch
     pub fn now_ms(&self) -> u64 {
         match self {
-            ClockSource::Real => std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("System time before Unix epoch")
-                .as_millis() as u64,
+            ClockSource::Real => WallClockTime::new().now_ms(),
             ClockSource::Sim(clock_fn) => clock_fn(),
         }
     }

@@ -9,6 +9,7 @@ use crate::snapshot::Snapshot;
 use crate::traits::{Sandbox, SandboxFactory, SandboxState, SandboxStats};
 use async_trait::async_trait;
 use bytes::Bytes;
+use kelpie_core::Runtime;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
@@ -184,26 +185,27 @@ impl Sandbox for ProcessSandbox {
         })?;
 
         // Wait with timeout
-        let result = tokio::time::timeout(timeout, async {
-            let mut stdout = Vec::new();
-            let mut stderr = Vec::new();
+        let result = kelpie_core::current_runtime()
+            .timeout(timeout, async {
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
 
-            if let Some(mut child_stdout) = child.stdout.take() {
-                let mut buf = vec![0u8; max_output];
-                let n = child_stdout.read(&mut buf).await.unwrap_or(0);
-                stdout.extend_from_slice(&buf[..n.min(max_output)]);
-            }
+                if let Some(mut child_stdout) = child.stdout.take() {
+                    let mut buf = vec![0u8; max_output];
+                    let n = child_stdout.read(&mut buf).await.unwrap_or(0);
+                    stdout.extend_from_slice(&buf[..n.min(max_output)]);
+                }
 
-            if let Some(mut child_stderr) = child.stderr.take() {
-                let mut buf = vec![0u8; max_output];
-                let n = child_stderr.read(&mut buf).await.unwrap_or(0);
-                stderr.extend_from_slice(&buf[..n.min(max_output)]);
-            }
+                if let Some(mut child_stderr) = child.stderr.take() {
+                    let mut buf = vec![0u8; max_output];
+                    let n = child_stderr.read(&mut buf).await.unwrap_or(0);
+                    stderr.extend_from_slice(&buf[..n.min(max_output)]);
+                }
 
-            let status = child.wait().await;
-            (stdout, stderr, status)
-        })
-        .await;
+                let status = child.wait().await;
+                (stdout, stderr, status)
+            })
+            .await;
 
         let duration = start.elapsed();
 
@@ -290,17 +292,12 @@ impl Sandbox for ProcessSandbox {
 }
 
 /// Factory for creating process sandboxes
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ProcessSandboxFactory;
 
 impl ProcessSandboxFactory {
     pub fn new() -> Self {
         Self
-    }
-}
-
-impl Default for ProcessSandboxFactory {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

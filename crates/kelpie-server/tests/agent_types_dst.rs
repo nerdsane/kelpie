@@ -38,10 +38,12 @@ fn create_agent_with_type(name: &str, agent_type: AgentType) -> AgentState {
         tags: vec![],
         metadata: json!({}),
         project_id: None,
+        user_id: None,
+        org_id: None,
     })
 }
 
-async fn setup_state_with_tools(state: &AppState) {
+async fn setup_state_with_tools<R: kelpie_core::Runtime + 'static>(state: &AppState<R>) {
     let registry = state.tool_registry();
 
     // Register mock shell tool (real shell uses sandbox which isn't available in tests)
@@ -239,7 +241,7 @@ fn test_tool_filtering_memgpt() {
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config).run(|_env| async move {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::current_runtime());
         setup_state_with_tools(&state).await;
 
         // Create MemGPT agent
@@ -277,7 +279,7 @@ fn test_tool_filtering_react() {
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config).run(|_env| async move {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::current_runtime());
         setup_state_with_tools(&state).await;
 
         // Create React agent
@@ -319,7 +321,7 @@ fn test_forbidden_tool_rejection_react() {
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config).run(|_env| async move {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::current_runtime());
         setup_state_with_tools(&state).await;
 
         // Create React agent
@@ -374,7 +376,7 @@ fn test_forbidden_tool_rejection_letta_v1() {
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config).run(|_env| async move {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::current_runtime());
         setup_state_with_tools(&state).await;
 
         let agent = create_agent_with_type("test-letta", AgentType::LettaV1Agent);
@@ -483,7 +485,8 @@ fn test_memgpt_memory_tools_under_faults() {
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(FaultType::StorageWriteFail, 0.3).with_filter("block_write"))
         .run(|env| async move {
-            let state = AppState::with_fault_injector(env.faults.clone());
+            let state =
+                AppState::with_fault_injector(kelpie_core::current_runtime(), env.faults.clone());
             register_memory_tools(state.tool_registry(), state.clone()).await;
 
             // Create MemGPT agent
@@ -549,7 +552,7 @@ fn test_agent_type_isolation() {
     println!("DST seed: {}", config.seed);
 
     let result = Simulation::new(config).run(|_env| async move {
-        let state = AppState::new();
+        let state = AppState::new(kelpie_core::current_runtime());
         setup_state_with_tools(&state).await;
 
         // Create agents of each type
@@ -613,7 +616,10 @@ fn test_agent_types_determinism() {
                 FaultConfig::new(FaultType::StorageWriteFail, 0.5).with_filter("block_write"),
             )
             .run(|env| async move {
-                let state = AppState::with_fault_injector(env.faults.clone());
+                let state = AppState::with_fault_injector(
+                    kelpie_core::current_runtime(),
+                    env.faults.clone(),
+                );
                 register_memory_tools(state.tool_registry(), state.clone()).await;
 
                 // Create all agent types

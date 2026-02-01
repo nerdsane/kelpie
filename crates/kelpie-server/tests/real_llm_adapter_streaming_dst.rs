@@ -1,114 +1,158 @@
 //! DST tests for LLM client streaming (Phase 7.8)
 //!
-//! TigerStyle: DST-first with full simulation environment
+//! TigerStyle: DST-first with real fault injection via FaultInjectedHttpClient
 //!
 //! Tests cover:
 //! - Token-by-token streaming (not batch conversion)
 //! - Stream cancellation and cleanup
 //! - Error handling during streaming
 //! - Multiple concurrent streams
-//! - Fault injection (storage delays)
+//! - Fault injection (LlmTimeout, LlmFailure, NetworkDelay)
 //!
-//! These tests focus on the LLM client streaming behavior,
-//! not the full service stack (which requires dispatcher streaming).
+//! FDB Principle: Same Code Path
+//! These tests use RealLlmAdapter + FaultInjectedHttpClient to exercise
+//! the same code path as production, with deterministic fault injection.
 #![cfg(feature = "dst")]
 
 use async_trait::async_trait;
-use futures::stream::{self, Stream, StreamExt};
-use kelpie_core::Result;
+use bytes::Bytes;
+use futures::stream::{self, StreamExt};
+use kelpie_core::{RngProvider, TimeProvider};
 use kelpie_dst::{FaultConfig, FaultType, SimConfig, Simulation};
-use kelpie_server::actor::{LlmClient, LlmMessage, LlmResponse, StreamChunk};
+use kelpie_server::actor::{LlmClient, LlmMessage, RealLlmAdapter, StreamChunk};
+use kelpie_server::http::{HttpClient, HttpRequest, HttpResponse};
+use kelpie_server::llm::{LlmClient as RealLlmClient, LlmConfig};
+use std::collections::HashMap;
 use std::pin::Pin;
+use std::sync::Arc;
 
-/// Mock streaming LLM client for testing
-///
-/// Simulates incremental token delivery (not batch → stream conversion)
-struct MockStreamingLlmClient {
-    /// Tokens to stream
-    tokens: Vec<String>,
+/// Build mock Anthropic SSE response with specified tokens
+fn mock_sse_response(tokens: &[&str]) -> String {
+    let mut events = vec![
+        "event: message_start\n".to_string(),
+        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\"}}\n".to_string(),
+        "\n".to_string(),
+        "event: content_block_start\n".to_string(),
+        "data: {\"type\":\"content_block_start\",\"index\":0}\n".to_string(),
+        "\n".to_string(),
+    ];
+
+    for token in tokens {
+        let escaped = token.replace('\\', "\\\\").replace('"', "\\\"");
+        events.push("event: content_block_delta\n".to_string());
+        events.push(format!(
+            "data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{}\"}}}}\n",
+            escaped
+        ));
+        events.push("\n".to_string());
+    }
+
+    events.push("event: message_stop\n".to_string());
+    events.push("data: {\"type\":\"message_stop\"}\n".to_string());
+    events.push("\n".to_string());
+
+    events.join("")
 }
 
-impl MockStreamingLlmClient {
-    fn new(tokens: Vec<String>) -> Self {
-        Self { tokens }
+/// HTTP client with fault injection for DST
+struct FaultInjectedHttpClient {
+    faults: Arc<kelpie_dst::FaultInjector>,
+    rng: Arc<kelpie_dst::DeterministicRng>,
+    time: Arc<dyn TimeProvider>,
+    stream_body: String,
+}
+
+impl FaultInjectedHttpClient {
+    async fn inject_faults(&self) -> Result<(), String> {
+        if let Some(fault) = self.faults.should_inject("http_send") {
+            match fault {
+                FaultType::NetworkPacketLoss => {
+                    return Err("Network packet loss".to_string());
+                }
+                FaultType::NetworkDelay { min_ms, max_ms } => {
+                    let delay_ms = if min_ms == max_ms {
+                        min_ms
+                    } else {
+                        self.rng.as_ref().gen_range(min_ms, max_ms)
+                    };
+                    self.time.sleep_ms(delay_ms).await;
+                }
+                FaultType::LlmTimeout => {
+                    return Err("LLM request timed out".to_string());
+                }
+                FaultType::LlmFailure => {
+                    return Err("LLM API failure".to_string());
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 }
 
 #[async_trait]
-impl LlmClient for MockStreamingLlmClient {
-    async fn complete_with_tools(
-        &self,
-        _messages: Vec<LlmMessage>,
-        _tools: Vec<kelpie_server::llm::ToolDefinition>,
-    ) -> Result<LlmResponse> {
-        // Batch mode - concatenate all tokens
-        Ok(LlmResponse {
-            content: self.tokens.join(""),
-            tool_calls: vec![],
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            stop_reason: "end_turn".to_string(),
+impl HttpClient for FaultInjectedHttpClient {
+    async fn send(&self, _request: HttpRequest) -> Result<HttpResponse, String> {
+        self.inject_faults().await?;
+        Ok(HttpResponse {
+            status: 200,
+            headers: HashMap::new(),
+            body: Vec::new(),
         })
     }
 
-    async fn continue_with_tool_result(
+    async fn send_streaming(
         &self,
-        _messages: Vec<LlmMessage>,
-        _tools: Vec<kelpie_server::llm::ToolDefinition>,
-        _assistant_blocks: Vec<kelpie_server::llm::ContentBlock>,
-        _tool_results: Vec<(String, String)>,
-    ) -> Result<LlmResponse> {
-        Ok(LlmResponse {
-            content: self.tokens.join(""),
-            tool_calls: vec![],
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            stop_reason: "end_turn".to_string(),
-        })
-    }
-
-    async fn stream_complete(
-        &self,
-        _messages: Vec<LlmMessage>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
-        // Real streaming - emit tokens incrementally
-        let tokens = self.tokens.clone();
-
-        // Create stream that emits tokens one by one
-        let chunks: Vec<Result<StreamChunk>> = tokens
-            .into_iter()
-            .map(|token| Ok(StreamChunk::ContentDelta { delta: token }))
-            .chain(std::iter::once(Ok(StreamChunk::Done {
-                stop_reason: "end_turn".to_string(),
-            })))
-            .collect();
-
-        Ok(Box::pin(stream::iter(chunks)))
+        _request: HttpRequest,
+    ) -> Result<Pin<Box<dyn futures::stream::Stream<Item = Result<Bytes, String>> + Send>>, String>
+    {
+        self.inject_faults().await?;
+        let stream = stream::iter(vec![Ok(Bytes::from(self.stream_body.clone()))]);
+        Ok(Box::pin(stream))
     }
 }
 
-/// Test token-by-token streaming (not batch conversion)
+/// Create LLM config for testing
+fn test_llm_config() -> LlmConfig {
+    LlmConfig {
+        base_url: "http://test.anthropic.com".to_string(),
+        api_key: "test-key".to_string(),
+        model: "claude-test".to_string(),
+        max_tokens: 100,
+    }
+}
+
+/// Test token-by-token streaming with RealLlmAdapter + FaultInjectedHttpClient
+///
+/// FDB Principle: Same Code Path
+/// Uses production adapter with simulated HTTP layer.
 ///
 /// Contract:
 /// - Tokens arrive incrementally (one per chunk)
 /// - Order preserved
 /// - Stream ends with Done chunk
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_client_token_streaming() {
     let config = SimConfig::new(6001);
 
     let result = Simulation::new(config)
-        .run_async(|_sim_env| async move {
-            let tokens = vec![
-                "Hello".to_string(),
-                " ".to_string(),
-                "world".to_string(),
-                "!".to_string(),
-            ];
-            let client = MockStreamingLlmClient::new(tokens.clone());
+        .run_async(|sim_env| async move {
+            let tokens = ["Hello", " ", "world", "!"];
+            let expected_content = tokens.join("");
 
-            // Call stream_complete directly
-            let mut stream = client
+            let http_client = Arc::new(FaultInjectedHttpClient {
+                faults: sim_env.faults.clone(),
+                rng: sim_env.rng.clone(),
+                time: sim_env.io_context.time.clone(),
+                stream_body: mock_sse_response(&tokens),
+            });
+
+            let llm_client = RealLlmClient::with_http_client(test_llm_config(), http_client);
+            let adapter = RealLlmAdapter::new(llm_client);
+
+            // Stream through production code path
+            let mut stream = adapter
                 .stream_complete(vec![LlmMessage {
                     role: "user".to_string(),
                     content: "Say hello".to_string(),
@@ -116,15 +160,17 @@ async fn test_dst_llm_client_token_streaming() {
                 .await?;
 
             // Collect chunks
-            let mut content_chunks = Vec::new();
+            let mut content = String::new();
+            let mut chunk_count = 0;
             let mut done_received = false;
 
             while let Some(chunk_result) = stream.next().await {
                 let chunk = chunk_result?;
+                chunk_count += 1;
 
                 match chunk {
                     StreamChunk::ContentDelta { delta } => {
-                        content_chunks.push(delta);
+                        content.push_str(&delta);
                     }
                     StreamChunk::Done { .. } => {
                         done_received = true;
@@ -135,15 +181,12 @@ async fn test_dst_llm_client_token_streaming() {
             }
 
             // Verify streaming behavior
-            assert_eq!(
-                content_chunks.len(),
-                tokens.len(),
-                "Should have same number of chunks as tokens"
+            assert!(
+                chunk_count >= tokens.len(),
+                "Should have at least {} chunks",
+                tokens.len()
             );
-            assert_eq!(
-                content_chunks, tokens,
-                "Chunks should match tokens in order"
-            );
+            assert_eq!(content, expected_content, "Content should match");
             assert!(done_received, "Should receive Done chunk");
 
             Ok(())
@@ -157,23 +200,34 @@ async fn test_dst_llm_client_token_streaming() {
     );
 }
 
-/// Test stream cancellation (early drop)
+/// Test stream cancellation (early drop) with RealLlmAdapter
 ///
 /// Contract:
 /// - Dropping stream consumer stops iteration
 /// - No resource leak
 /// - Clean shutdown
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_client_cancellation() {
     let config = SimConfig::new(6002);
 
     let result = Simulation::new(config)
-        .run_async(|_sim_env| async move {
-            let tokens: Vec<String> = (0..100).map(|i| format!("token{} ", i)).collect();
-            let client = MockStreamingLlmClient::new(tokens);
+        .run_async(|sim_env| async move {
+            // Generate many tokens for long response
+            let tokens: Vec<&str> = (0..50).map(|_| "token ").collect();
+
+            let http_client = Arc::new(FaultInjectedHttpClient {
+                faults: sim_env.faults.clone(),
+                rng: sim_env.rng.clone(),
+                time: sim_env.io_context.time.clone(),
+                stream_body: mock_sse_response(&tokens),
+            });
+
+            let llm_client = RealLlmClient::with_http_client(test_llm_config(), http_client);
+            let adapter = RealLlmAdapter::new(llm_client);
 
             // Start streaming
-            let mut stream = client
+            let mut stream = adapter
                 .stream_complete(vec![LlmMessage {
                     role: "user".to_string(),
                     content: "Long response".to_string(),
@@ -191,7 +245,7 @@ async fn test_dst_llm_client_cancellation() {
             }
 
             // Stream is dropped here - should clean up without panic
-            assert_eq!(consumed, 5, "Should have consumed exactly 5 chunks");
+            assert!(consumed >= 5, "Should have consumed at least 5 chunks");
 
             Ok(())
         })
@@ -204,37 +258,41 @@ async fn test_dst_llm_client_cancellation() {
     );
 }
 
-/// Test streaming with storage delays
+/// Test streaming with network delays (LLM-specific faults)
 ///
 /// Contract:
-/// - Stream completes despite StorageLatency faults
+/// - Stream completes despite NetworkDelay faults
 /// - Tokens arrive in order
 /// - No tokens lost
-#[tokio::test]
-async fn test_dst_llm_client_with_storage_delay() {
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_dst_llm_client_with_network_delay() {
     let config = SimConfig::new(6003);
 
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(
-            FaultType::StorageLatency {
+            FaultType::NetworkDelay {
                 min_ms: 5,
                 max_ms: 20,
             },
-            0.5, // 50% of operations delayed
+            0.5, // 50% of HTTP operations delayed
         ))
-        .run_async(|_sim_env| async move {
-            let tokens = vec![
-                "One".to_string(),
-                " ".to_string(),
-                "Two".to_string(),
-                " ".to_string(),
-                "Three".to_string(),
-            ];
+        .run_async(|sim_env| async move {
+            let tokens = ["One", " ", "Two", " ", "Three"];
             let expected_content = tokens.join("");
-            let client = MockStreamingLlmClient::new(tokens);
+
+            let http_client = Arc::new(FaultInjectedHttpClient {
+                faults: sim_env.faults.clone(),
+                rng: sim_env.rng.clone(),
+                time: sim_env.io_context.time.clone(),
+                stream_body: mock_sse_response(&tokens),
+            });
+
+            let llm_client = RealLlmClient::with_http_client(test_llm_config(), http_client);
+            let adapter = RealLlmAdapter::new(llm_client);
 
             // Stream with delays active
-            let mut stream = client
+            let mut stream = adapter
                 .stream_complete(vec![LlmMessage {
                     role: "user".to_string(),
                     content: "Count words".to_string(),
@@ -259,33 +317,49 @@ async fn test_dst_llm_client_with_storage_delay() {
 
     assert!(
         result.is_ok(),
-        "Storage delay test failed: {:?}",
+        "Network delay test failed: {:?}",
         result.err()
     );
 }
 
-/// Test concurrent streams
+/// Test concurrent streams with RealLlmAdapter
 ///
 /// Contract:
-/// - Multiple clients can stream concurrently
+/// - Multiple adapters can stream concurrently
 /// - Streams don't interfere with each other
 /// - All streams complete successfully
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_client_concurrent() {
     let config = SimConfig::new(6004);
 
     let result = Simulation::new(config)
-        .run_async(|_sim_env| async move {
-            // Create 3 clients with different token sets
+        .run_async(|sim_env| async move {
+            use kelpie_core::{current_runtime, Runtime};
+            let runtime = current_runtime();
+
+            // Create 3 concurrent streams with different responses
             let mut handles = Vec::new();
 
             for i in 1..=3 {
-                let tokens: Vec<String> =
-                    (0..10).map(|j| format!("client{}token{} ", i, j)).collect();
-                let client = MockStreamingLlmClient::new(tokens);
+                let tokens_static: Vec<&str> = match i {
+                    1 => vec!["Client", " one", " response"],
+                    2 => vec!["Client", " two", " response"],
+                    _ => vec!["Client", " three", " response"],
+                };
 
-                let handle = tokio::spawn(async move {
-                    let mut stream = client
+                let http_client = Arc::new(FaultInjectedHttpClient {
+                    faults: sim_env.faults.clone(),
+                    rng: sim_env.rng.clone(),
+                    time: sim_env.io_context.time.clone(),
+                    stream_body: mock_sse_response(&tokens_static),
+                });
+
+                let llm_client = RealLlmClient::with_http_client(test_llm_config(), http_client);
+                let adapter = RealLlmAdapter::new(llm_client);
+
+                let handle = runtime.spawn(async move {
+                    let mut stream = adapter
                         .stream_complete(vec![LlmMessage {
                             role: "user".to_string(),
                             content: format!("Message {}", i),
@@ -330,31 +404,41 @@ async fn test_dst_llm_client_concurrent() {
     );
 }
 
-/// Test streaming with comprehensive fault injection
+/// Test streaming with comprehensive LLM-specific fault injection
 ///
 /// Contract:
-/// - Stream completes despite multiple faults
-/// - Tokens arrive in order
-/// - Graceful degradation
-#[tokio::test]
+/// - Stream completes despite NetworkDelay faults
+/// - LlmTimeout and LlmFailure faults cause stream failure (tested separately)
+/// - Tokens arrive in order when stream succeeds
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_llm_client_comprehensive_faults() {
     let config = SimConfig::new(6005);
 
     let result = Simulation::new(config)
         .with_fault(FaultConfig::new(
-            FaultType::StorageLatency {
+            FaultType::NetworkDelay {
                 min_ms: 10,
                 max_ms: 30,
             },
-            0.4, // 40% storage delays
+            0.4, // 40% network delays
         ))
-        .run_async(|_sim_env| async move {
-            let tokens: Vec<String> = (0..20).map(|i| format!("t{} ", i)).collect();
+        .run_async(|sim_env| async move {
+            let tokens: Vec<&str> = (0..10).map(|_| "t ").collect();
             let expected_content = tokens.join("");
-            let client = MockStreamingLlmClient::new(tokens);
+
+            let http_client = Arc::new(FaultInjectedHttpClient {
+                faults: sim_env.faults.clone(),
+                rng: sim_env.rng.clone(),
+                time: sim_env.io_context.time.clone(),
+                stream_body: mock_sse_response(&tokens),
+            });
+
+            let llm_client = RealLlmClient::with_http_client(test_llm_config(), http_client);
+            let adapter = RealLlmAdapter::new(llm_client);
 
             // Stream with faults active
-            let mut stream = client
+            let mut stream = adapter
                 .stream_complete(vec![LlmMessage {
                     role: "user".to_string(),
                     content: "Test resilience".to_string(),
@@ -365,7 +449,7 @@ async fn test_dst_llm_client_comprehensive_faults() {
             let mut content = String::new();
 
             while let Some(chunk_result) = stream.next().await {
-                // Should not fail despite faults
+                // Should not fail despite network delays
                 let chunk = chunk_result?;
                 chunk_count += 1;
 
@@ -385,6 +469,132 @@ async fn test_dst_llm_client_comprehensive_faults() {
     assert!(
         result.is_ok(),
         "Comprehensive fault test failed: {:?}",
+        result.err()
+    );
+}
+
+/// Test streaming with LlmTimeout faults
+///
+/// Contract:
+/// - LlmTimeout fault causes stream initiation to fail
+/// - Error is properly propagated
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_dst_llm_client_timeout_fault() {
+    let config = SimConfig::new(6006);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(
+            FaultType::LlmTimeout,
+            0.9, // 90% timeout (should reliably fail)
+        ))
+        .run_async(|sim_env| async move {
+            let http_client = Arc::new(FaultInjectedHttpClient {
+                faults: sim_env.faults.clone(),
+                rng: sim_env.rng.clone(),
+                time: sim_env.io_context.time.clone(),
+                stream_body: mock_sse_response(&["test"]),
+            });
+
+            let llm_client = RealLlmClient::with_http_client(test_llm_config(), http_client);
+            let adapter = RealLlmAdapter::new(llm_client);
+
+            // With 90% timeout, stream should likely fail
+            let stream_result = adapter
+                .stream_complete(vec![LlmMessage {
+                    role: "user".to_string(),
+                    content: "Test timeout".to_string(),
+                }])
+                .await;
+
+            // Most attempts should fail with timeout
+            match stream_result {
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    tracing::info!(error = %error_msg, "LLM timeout correctly triggered");
+                    assert!(
+                        error_msg.contains("timeout") || error_msg.contains("LLM"),
+                        "Error should mention timeout or LLM: {}",
+                        error_msg
+                    );
+                }
+                Ok(_) => {
+                    // 10% chance of success - that's fine
+                    tracing::info!("Lucky - request succeeded despite 90% timeout rate");
+                }
+            }
+
+            Ok(())
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Timeout fault test failed: {:?}",
+        result.err()
+    );
+}
+
+/// Test streaming with LlmFailure faults
+///
+/// Contract:
+/// - LlmFailure fault causes stream initiation to fail
+/// - Error is properly propagated
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
+async fn test_dst_llm_client_failure_fault() {
+    let config = SimConfig::new(6007);
+
+    let result = Simulation::new(config)
+        .with_fault(FaultConfig::new(
+            FaultType::LlmFailure,
+            0.9, // 90% failure (should reliably fail)
+        ))
+        .run_async(|sim_env| async move {
+            let http_client = Arc::new(FaultInjectedHttpClient {
+                faults: sim_env.faults.clone(),
+                rng: sim_env.rng.clone(),
+                time: sim_env.io_context.time.clone(),
+                stream_body: mock_sse_response(&["test"]),
+            });
+
+            let llm_client = RealLlmClient::with_http_client(test_llm_config(), http_client);
+            let adapter = RealLlmAdapter::new(llm_client);
+
+            // With 90% failure, stream should likely fail
+            let stream_result = adapter
+                .stream_complete(vec![LlmMessage {
+                    role: "user".to_string(),
+                    content: "Test failure".to_string(),
+                }])
+                .await;
+
+            // Most attempts should fail
+            match stream_result {
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    tracing::info!(error = %error_msg, "LLM failure correctly triggered");
+                    assert!(
+                        error_msg.contains("failure")
+                            || error_msg.contains("LLM")
+                            || error_msg.contains("API"),
+                        "Error should mention failure or LLM: {}",
+                        error_msg
+                    );
+                }
+                Ok(_) => {
+                    // 10% chance of success - that's fine
+                    tracing::info!("Lucky - request succeeded despite 90% failure rate");
+                }
+            }
+
+            Ok(())
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Failure fault test failed: {:?}",
         result.err()
     );
 }

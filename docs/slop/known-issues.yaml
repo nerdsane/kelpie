@@ -1,0 +1,183 @@
+exported_at: '2026-01-30T11:26:19.710588'
+commit: bfa1ee6794d2
+total_open: 18
+issues:
+- id: 0722764e-1f15-44b6-8ab0-c06b2963da5e
+  type: spec_drift
+  severity: high
+  location:
+  - docs/tla/KelpieLinearizability.tla
+  first_detected: 1769789830
+  recurrence_count: 0
+  evidence_summary: TLA+ spec defines 6 invariants (SequentialPerActor, ReadYourWrites,
+    MonotonicReads, DispatchConsistency, OwnershipConsistency) but no corresponding
+    DST test exists to verify these properties. Critical
+- id: 4eb3f1bb-216a-4571-a200-851f8b80ff8a
+  type: spec_drift
+  severity: high
+  location:
+  - docs/tla/KelpieMultiAgentInvocation.tla
+  first_detected: 1769789830
+  recurrence_count: 0
+  evidence_summary: TLA+ spec defines 5 invariants (NoDeadlock, BoundedPendingCalls,
+    DepthBounded, SingleActivationDuringCall) but no corresponding DST test. Multi-agent
+    invocation is core to AI orchestration use case.
+- id: f64570f2-6bbf-43c7-bb7b-4550177e0e38
+  type: fake_dst
+  severity: high
+  location:
+  - crates/kelpie-dst/tests/sandbox_dst.rs
+  first_detected: 1769789748
+  recurrence_count: 0
+  evidence_summary: 'Critical DST violations: (1) MockSandbox uses real system time
+    for uptime tracking, not simulated time. (2) Excessive mocking - entire sandbox
+    implementation is mocked, defeating purpose of DST which '
+- id: 647157cb-6c49-44d1-86e7-1ccbdefacdde
+  type: fake_dst
+  severity: high
+  location:
+  - crates/kelpie-dst/tests/cluster_dst.rs
+  first_detected: 1769789748
+  recurrence_count: 0
+  evidence_summary: 'DST violations: (1) Most tests call from_env_or_random() allowing
+    non-deterministic seed selection. (2) Actor invocation and migration completely
+    mocked with HashMaps, defeating purpose of testing rea'
+- id: 86746af4-ae63-4301-a76a-ec271b9d4312
+  type: fake_dst
+  severity: high
+  location:
+  - crates/kelpie-dst/tests/partition_tolerance_dst.rs
+  first_detected: 1769789748
+  recurrence_count: 0
+  evidence_summary: Tests mocked cluster behavior rather than real implementation.
+    SimClusterNode is a toy quorum model that doesn't capture actual consensus protocol.
+    Tests lose seed information via from_env_or_random()
+- id: fbcf5721-3ced-428f-b4ee-846c23ff2ec6
+  type: code_quality
+  severity: low
+  location:
+  - crates/kelpie-tools/src/mcp.rs
+  first_detected: 1769790120
+  recurrence_count: 0
+  evidence_summary: McpClient::discover_tools (~85 lines, 4 nesting levels), StdioTransport::reader_task
+    (~55 lines, 4 nesting levels). Complexity exceeds thresholds.
+- id: 7ef4ba27-463f-4a99-8ae5-e9a4c2863751
+  type: dead_code
+  severity: low
+  location:
+  - crates/kelpie-runtime/src/dispatcher.rs
+  first_detected: 1769789966
+  recurrence_count: 0
+  evidence_summary: '#[allow(dead_code)] on DispatcherHandle.runtime field - explicitly
+    suppresses legitimate warning. Field is cloned during handle() creation but never
+    used in any DispatcherHandle methods. Appears vesti'
+- id: ab0381d3-a3f7-4c80-b80e-854a61e019a1
+  type: dead_code
+  severity: low
+  location:
+  - crates/kelpie-registry/src/fdb.rs
+  first_detected: 1769789966
+  recurrence_count: 0
+  evidence_summary: 'Public async function ''read'' with #[allow(dead_code)] annotation
+    - never called within codebase. LeaseRenewalTask._handle field spawned but handle
+    never awaited or polled.'
+- id: c8ac58f9-ed4a-495e-a61e-942d573a2c6e
+  type: fake_dst
+  severity: low
+  location:
+  - crates/kelpie-dst/tests/vm_backend_firecracker_chaos.rs
+  first_detected: 1769789749
+  recurrence_count: 0
+  evidence_summary: Uses real filesystem paths ('/tmp/kelpie-missing-rootfs', '/tmp/kelpie-missing-kernel')
+    without simulation abstraction. Test relies on actual /tmp directory state which
+    is non-deterministic and enviro
+- id: 32e3cf36-9f1f-4220-9f57-bd7d6d1d4782
+  type: code_quality
+  severity: medium
+  location:
+  - crates/kelpie-server/src/actor/agent_actor.rs
+  first_detected: 1769790120
+  recurrence_count: 0
+  evidence_summary: 'High cognitive complexity: handle_message_full (~180 lines, 4+
+    nesting levels), handle_continue_with_tool_results (~150 lines), invoke method
+    (~200+ lines with 20+ match arms). Also has unwrap that si'
+- id: 6df11c8a-e9d0-4334-88fe-ec0016152086
+  type: code_quality
+  severity: medium
+  location:
+  - crates/kelpie-server/src/state.rs
+  first_detected: 1769790120
+  recurrence_count: 0
+  evidence_summary: 'Multiple functions exceeding complexity thresholds: with_registry
+    (~80 lines with deeply nested if-let chains), with_storage_and_registry (duplicated
+    code), upsert_tool (~70 lines, 4+ nesting levels).'
+- id: 99ce76f3-08d9-48e2-8ded-3a13fe60888a
+  type: duplicate_impl
+  severity: medium
+  location:
+  - crates/kelpie-core/src/error.rs
+  first_detected: 1769790008
+  recurrence_count: 0
+  evidence_summary: Significant error type duplication across 7 error.rs files. Identical
+    patterns (NotFound, ExecTimeout, ConfigError, Internal) reimplemented in kelpie-sandbox,
+    kelpie-memory, kelpie-tools, kelpie-vm, k
+- id: ba92f587-2e9d-43df-b165-c9f32fc9411d
+  type: spec_drift
+  severity: medium
+  location:
+  - docs/tla/KelpieWAL.tla
+  first_detected: 1769789830
+  recurrence_count: 0
+  evidence_summary: 'TLA+ spec defines WAL invariants (Durability, Idempotency, AtomicVisibility)
+    and properties (EventualRecovery, ProgressUnderCrash) but no WAL-specific DST
+    test exists. WAL correctness is critical for '
+- id: 663bc9c2-8cc9-4093-9428-ed153e914f56
+  type: spec_drift
+  severity: medium
+  location:
+  - docs/tla/KelpieRegistry.tla
+  first_detected: 1769789830
+  recurrence_count: 0
+  evidence_summary: TLA+ spec defines registry invariants (SingleActivation, PlacementConsistency)
+    and properties (EventualFailureDetection, EventualCacheInvalidation) but no registry-specific
+    DST test. Registry consiste
+- id: 3399720c-660b-4deb-a147-157f3d0d5f09
+  type: fake_dst
+  severity: medium
+  location:
+  - crates/kelpie-dst/tests/snapshot_types_dst.rs
+  first_detected: 1769789749
+  recurrence_count: 0
+  evidence_summary: get_seed() falls back to rand::random() making tests non-reproducible
+    if DST_SEED env var missing. Tests simulated storage/sandbox not real implementations.
+    Fault injection percentages arbitrary and n
+- id: 3b0db5e9-1d38-448b-bc9e-050367eaecf6
+  type: fake_dst
+  severity: medium
+  location:
+  - crates/kelpie-dst/tests/vm_teleport_dst.rs
+  first_detected: 1769789749
+  recurrence_count: 0
+  evidence_summary: 'Hybrid test, not pure DST. Uses simulation harness but delegates
+    to real VmInstance for core operations (start, exec, snapshot). Real VM operations
+    are non-deterministic and interact with real system '
+- id: 002c5639-d8bd-4d90-adfa-90b43fe7b0e1
+  type: fake_dst
+  severity: medium
+  location:
+  - crates/kelpie-dst/tests/tools_dst.rs
+  first_detected: 1769789748
+  recurrence_count: 0
+  evidence_summary: 'DST violations: (1) Timeout Duration hardcoded without sim-time
+    awareness. (2) Most tests use from_env_or_random() breaking reproducibility. (3)
+    Real I/O through MockSandbox bypasses simulation contro'
+- id: 306fd3ab-d42b-4eab-af4d-3d43ebdd007f
+  type: fake_dst
+  severity: medium
+  location:
+  - crates/kelpie-dst/tests/simstorage_transaction_dst.rs
+  first_detected: 1769789748
+  recurrence_count: 0
+  evidence_summary: Uses real system functions (chrono::Utc::now(), uuid::Uuid::new_v4())
+    in helper functions test_agent(), test_block(), test_message(). These non-deterministic
+    sources make failures unreproducible. Shou

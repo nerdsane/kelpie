@@ -1,0 +1,7 @@
+{
+  "version": "1.0.0",
+  "description": "Constraints extracted from .vision/CONSTRAINTS.md with verification commands",
+  "extracted_at": null,
+  "source": ".vision/CONSTRAINTS.md",
+  "constraints": []
+}

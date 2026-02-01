@@ -18,7 +18,8 @@ use kelpie_server::memory::UmiMemoryBackend;
 /// Test that we can create and retrieve core memory blocks.
 ///
 /// DST: No faults - baseline behavior.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_core_memory_basic() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed());
@@ -57,7 +58,8 @@ async fn test_dst_core_memory_basic() {
 ///
 /// DST: 10% StorageWriteFail probability.
 /// Expected: Operations may fail - we're testing that the system handles faults.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_core_memory_with_storage_faults() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed());
@@ -100,7 +102,8 @@ async fn test_dst_core_memory_with_storage_faults() {
 /// Test core memory replace operation.
 ///
 /// DST: No faults - verify replace semantics.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_core_memory_replace() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed());
@@ -139,7 +142,8 @@ async fn test_dst_core_memory_replace() {
 /// Test archival memory insert and search.
 ///
 /// DST: No faults - baseline archival operations.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_archival_memory_basic() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed());
@@ -180,7 +184,8 @@ async fn test_dst_archival_memory_basic() {
 ///
 /// DST: 10% EmbeddingTimeout probability.
 /// Expected: Operations may fail - we're testing fault handling.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_archival_memory_with_embedding_faults() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed());
@@ -220,7 +225,8 @@ async fn test_dst_archival_memory_with_embedding_faults() {
 /// Test conversation storage and search.
 ///
 /// DST: No faults - baseline conversation operations.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_conversation_storage_basic() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed());
@@ -262,7 +268,8 @@ async fn test_dst_conversation_storage_basic() {
 ///
 /// DST: 10% VectorSearchFail probability.
 /// Expected: Operations may fail - we're testing fault handling.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_conversation_search_with_vector_faults() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed());
@@ -305,7 +312,8 @@ async fn test_dst_conversation_search_with_vector_faults() {
 /// DST: StorageWriteFail to simulate crash scenarios.
 /// Note: Current implementation uses in-memory storage, so this tests
 /// the API contract rather than actual persistence.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_crash_recovery() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed());
@@ -347,7 +355,8 @@ async fn test_dst_crash_recovery() {
 /// Test agent scoping - different agents have isolated memory.
 ///
 /// DST: No faults - verify isolation semantics.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_agent_isolation() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed());
@@ -388,7 +397,8 @@ async fn test_dst_agent_isolation() {
 ///
 /// DST: Multiple fault types at low probability.
 /// Expected: System remains stable under concurrent load with faults.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_high_load_with_faults() {
     let config = SimConfig::from_env_or_random();
     println!("DST seed: {}", config.seed());
@@ -455,7 +465,8 @@ async fn test_dst_high_load_with_faults() {
 /// Test determinism: same seed produces same results.
 ///
 /// This is a meta-test verifying the DST framework itself.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_determinism() {
     let seed = 42u64;
 
@@ -511,7 +522,8 @@ async fn test_dst_determinism() {
 /// Test that fault injection actually works.
 ///
 /// This test verifies faults ARE being injected by using 100% fault rate.
-#[tokio::test]
+#[cfg_attr(feature = "madsim", madsim::test)]
+#[cfg_attr(not(feature = "madsim"), tokio::test)]
 async fn test_dst_fault_injection_verification() {
     let config = SimConfig::with_seed(12345);
     println!("DST seed: {}", config.seed());

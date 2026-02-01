@@ -1,0 +1,55 @@
+[project]
+name = "mcp-kelpie"
+version = "0.1.0"
+description = "MCP server for Kelpie Repo OS - VDE-aligned single Python server"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # MCP SDK
+    "mcp>=1.0.0",
+
+    # AgentFS SDK (Turso)
+    "agentfs-sdk>=0.5.3",
+
+    # Tree-sitter for indexing
+    "tree-sitter>=0.21.0",
+    "tree-sitter-rust>=0.21.0",
+
+    # LLM for RLM sub-queries
+    "anthropic>=0.34.0",
+
+    # RLM sandboxed execution
+    "RestrictedPython>=7.0",
+
+    # Utilities
+    "aiofiles>=24.0.0",
+    "watchfiles>=0.24.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "black>=24.0.0",
+    "ruff>=0.6.0",
+]
+
+[project.scripts]
+mcp-kelpie = "mcp_kelpie.server:cli_main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

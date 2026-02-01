@@ -24,6 +24,15 @@ An ADR is a document that captures an important architectural decision made alon
 | [018](./018-vmconfig-kernel-initrd-fields.md) | Add Kernel/Initrd Paths to VmConfig | Accepted | ✅ Complete |
 | [019](./019-vm-backends-crate.md) | Separate VM Backend Factory Crate | Superseded | ✅ Complete |
 | [020](./020-consolidated-vm-crate.md) | Consolidate VM Core + Backends into kelpie-vm | Accepted | ✅ Complete |
+| [021](./021-snapshot-type-system.md) | Snapshot Type System | Accepted | ✅ Complete |
+| [022](./022-wal-design.md) | WAL Design | Accepted | 🚧 Partial |
+| [023](./023-actor-registry-design.md) | Actor Registry Design | Accepted | ✅ Complete |
+| [024](./024-actor-migration-protocol.md) | Actor Migration Protocol | Accepted | 🚧 Partial |
+| [025](./025-cluster-membership-protocol.md) | Cluster Membership Protocol | Accepted | 🚧 Partial |
+| [026](./026-mcp-tool-integration.md) | MCP Tool Integration | Accepted | ✅ Complete |
+| [027](./027-sandbox-execution-design.md) | Sandbox Execution Design | Accepted | ✅ Complete |
+| [028](./028-multi-agent-communication.md) | Multi-Agent Communication | Accepted | 🚧 Partial |
+| [029](./029-federated-peer-architecture.md) | Federated Peer Architecture | Proposed | ⏳ Not Started |
 
 ## Creating a New ADR
 

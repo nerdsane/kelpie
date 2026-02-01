@@ -9,8 +9,9 @@ mod mock;
 mod snapshot;
 mod traits;
 mod virtio_fs;
+mod vm_images;
 
-#[cfg(any(feature = "firecracker", feature = "vz"))]
+#[cfg(any(feature = "firecracker", feature = "libkrun"))]
 mod backends;
 
 pub use backend::{VmBackend, VmBackendFactory, VmBackendKind};
@@ -21,12 +22,22 @@ pub use snapshot::{VmSnapshot, VmSnapshotMetadata};
 pub use traits::{ExecOptions as VmExecOptions, ExecOutput as VmExecOutput};
 pub use traits::{ExecOptions, ExecOutput, VmFactory, VmInstance, VmState};
 pub use virtio_fs::{VirtioFsConfig, VirtioFsMount};
+pub use vm_images::{VmImageManager, VmImagePaths};
 
 #[cfg(feature = "firecracker")]
 pub use backends::firecracker::{FirecrackerConfig, FirecrackerVm, FirecrackerVmFactory};
 
-#[cfg(all(feature = "vz", target_os = "macos"))]
-pub use backends::vz::{VzConfig, VzVm, VzVmFactory};
+#[cfg(feature = "libkrun")]
+pub use backends::libkrun::{
+    LibkrunConfig, LibkrunVm, LibkrunVmFactory, LIBKRUN_MEMORY_MIB_DEFAULT,
+    LIBKRUN_VCPU_COUNT_DEFAULT, LIBKRUN_VSOCK_PORT_DEFAULT,
+};
+
+#[cfg(feature = "libkrun")]
+pub use backends::libkrun_sandbox::{
+    LibkrunSandbox, LibkrunSandboxConfig, LibkrunSandboxFactory,
+    LIBKRUN_SANDBOX_MEMORY_MIB_DEFAULT, LIBKRUN_SANDBOX_VCPU_COUNT_DEFAULT,
+};
 
 // ============================================================================
 // TigerStyle Constants

@@ -41,5 +41,6 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 # Checksums (for libkrun snapshot verification)
 crc32fast = { workspace = true }
 
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }

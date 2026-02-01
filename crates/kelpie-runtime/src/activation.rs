@@ -9,10 +9,11 @@ use kelpie_core::actor::{
 };
 use kelpie_core::constants::{ACTOR_IDLE_TIMEOUT_MS_DEFAULT, ACTOR_INVOCATION_TIMEOUT_MS_MAX};
 use kelpie_core::error::{Error, Result};
+use kelpie_core::io::{TimeProvider, WallClockTime};
 use kelpie_storage::{ActorKV, ScopedKV};
 use serde::{de::DeserializeOwned, Serialize};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tracing::{debug, error, info, instrument, warn};
 
 /// State key for actor's serialized state
@@ -43,50 +44,70 @@ impl std::fmt::Display for ActivationState {
 }
 
 /// Statistics for an active actor
+///
+/// Uses monotonic timestamps (u64 ms) for DST compatibility.
 #[derive(Debug, Clone, Default)]
 pub struct ActivationStats {
-    /// When the actor was activated
-    pub activated_at: Option<Instant>,
-    /// Last time the actor processed a message
-    pub last_activity_at: Option<Instant>,
+    /// When the actor was activated (monotonic ms)
+    pub activated_at_ms: Option<u64>,
+    /// Last time the actor processed a message (monotonic ms)
+    pub last_activity_at_ms: Option<u64>,
     /// Total invocations processed
     pub invocation_count: u64,
     /// Total invocation errors
     pub error_count: u64,
-    /// Total time spent processing (for average calculation)
-    pub total_processing_time: Duration,
+    /// Total time spent processing in ms (for average calculation)
+    pub total_processing_time_ms: u64,
 }
 
 impl ActivationStats {
-    /// Create new stats with activation time
+    /// Create new stats with activation time (uses production wall clock)
     pub fn new() -> Self {
+        Self::with_time(&WallClockTime::new())
+    }
+
+    /// Create new stats with custom time provider (for DST)
+    pub fn with_time(time: &dyn TimeProvider) -> Self {
         Self {
-            activated_at: Some(Instant::now()),
-            last_activity_at: None,
+            activated_at_ms: Some(time.monotonic_ms()),
+            last_activity_at_ms: None,
             invocation_count: 0,
             error_count: 0,
-            total_processing_time: Duration::ZERO,
+            total_processing_time_ms: 0,
         }
     }
 
-    /// Record an invocation
-    pub fn record_invocation(&mut self, duration: Duration, is_error: bool) {
-        self.last_activity_at = Some(Instant::now());
+    /// Record an invocation (uses wall clock time)
+    ///
+    /// For DST compatibility, use `record_invocation_with_time` instead.
+    pub fn record_invocation(&mut self, duration_ms: u64, is_error: bool) {
+        self.record_invocation_with_time(duration_ms, is_error, &WallClockTime::new());
+    }
+
+    /// Record an invocation with time provider (for DST)
+    pub fn record_invocation_with_time(
+        &mut self,
+        duration_ms: u64,
+        is_error: bool,
+        time: &dyn TimeProvider,
+    ) {
+        self.last_activity_at_ms = Some(time.monotonic_ms());
         self.invocation_count = self.invocation_count.wrapping_add(1);
-        self.total_processing_time += duration;
+        self.total_processing_time_ms = self.total_processing_time_ms.saturating_add(duration_ms);
         if is_error {
             self.error_count = self.error_count.wrapping_add(1);
         }
     }
 
-    /// Get idle time (time since last activity)
-    pub fn idle_time(&self) -> Duration {
-        match self.last_activity_at {
-            Some(t) => t.elapsed(),
+    /// Get idle time (time since last activity) using time provider
+    pub fn idle_time_ms(&self, time: &dyn TimeProvider) -> u64 {
+        let now_ms = time.monotonic_ms();
+        match self.last_activity_at_ms {
+            Some(t) => now_ms.saturating_sub(t),
             None => self
-                .activated_at
-                .map(|t| t.elapsed())
-                .unwrap_or(Duration::ZERO),
+                .activated_at_ms
+                .map(|t| now_ms.saturating_sub(t))
+                .unwrap_or(0),
         }
     }
 
@@ -95,7 +116,7 @@ impl ActivationStats {
         if self.invocation_count == 0 {
             Duration::ZERO
         } else {
-            self.total_processing_time / self.invocation_count as u32
+            Duration::from_millis(self.total_processing_time_ms / self.invocation_count)
         }
     }
 }
@@ -125,6 +146,8 @@ where
     idle_timeout: Duration,
     /// Scoped KV store for persistence (bound to this actor)
     kv: ScopedKV,
+    /// Time provider for DST compatibility
+    time: Arc<dyn TimeProvider>,
 }
 
 impl<A, S> ActiveActor<A, S>
@@ -132,11 +155,24 @@ where
     A: Actor<State = S>,
     S: Serialize + DeserializeOwned + Default + Send + Sync + Clone,
 {
-    /// Activate an actor
+    /// Activate an actor using production wall clock
     ///
-    /// Loads state from storage and calls on_activate.
+    /// For DST, use `activate_with_time`.
     #[instrument(skip(actor, kv), fields(actor_id = %id), level = "info")]
     pub async fn activate(id: ActorId, actor: A, kv: Arc<dyn ActorKV>) -> Result<Self> {
+        Self::activate_with_time(id, actor, kv, Arc::new(WallClockTime::new())).await
+    }
+
+    /// Activate an actor with custom time provider (for DST)
+    ///
+    /// Loads state from storage and calls on_activate.
+    #[instrument(skip(actor, kv, time), fields(actor_id = %id), level = "info")]
+    pub async fn activate_with_time(
+        id: ActorId,
+        actor: A,
+        kv: Arc<dyn ActorKV>,
+        time: Arc<dyn TimeProvider>,
+    ) -> Result<Self> {
         debug!(actor_id = %id, "Activating actor");
 
         // Create a scoped KV bound to this actor
@@ -151,8 +187,9 @@ where
             context: ActorContext::with_default_state(id.clone(), Box::new(context_kv)),
             mailbox: Mailbox::new(),
             state: ActivationState::Activating,
-            stats: ActivationStats::new(),
+            stats: ActivationStats::with_time(time.as_ref()),
             idle_timeout: Duration::from_millis(ACTOR_IDLE_TIMEOUT_MS_DEFAULT),
+            time,
             kv: scoped_kv,
         };
 
@@ -210,7 +247,7 @@ where
         Ok(())
     }
 
-    /// Process an invocation
+    /// Process an invocation using the actor's time provider
     ///
     /// State AND KV operations are persisted atomically within a single transaction
     /// after each successful invocation. This ensures crash safety - if the node
@@ -219,6 +256,24 @@ where
     /// TigerStyle: Transactional state + KV persistence, 2+ assertions.
     #[instrument(skip(self, payload), fields(actor_id = %self.id, operation), level = "info")]
     pub async fn process_invocation(&mut self, operation: &str, payload: Bytes) -> Result<Bytes> {
+        self.process_invocation_with_time(operation, payload, self.time.clone())
+            .await
+    }
+
+    /// Process an invocation with external time provider (for DST)
+    ///
+    /// State AND KV operations are persisted atomically within a single transaction
+    /// after each successful invocation. This ensures crash safety - if the node
+    /// crashes, either all changes (state + KV) are persisted or none are.
+    ///
+    /// TigerStyle: Transactional state + KV persistence, 2+ assertions.
+    #[instrument(skip(self, payload, time), fields(actor_id = %self.id, operation), level = "info")]
+    pub async fn process_invocation_with_time(
+        &mut self,
+        operation: &str,
+        payload: Bytes,
+        time: Arc<dyn TimeProvider>,
+    ) -> Result<Bytes> {
         // Preconditions
         assert!(
             self.state == ActivationState::Active,
@@ -226,7 +281,8 @@ where
         );
         assert!(!operation.is_empty(), "operation cannot be empty");
 
-        let start = Instant::now();
+        // Use time provider for DST determinism
+        let start_ms = time.monotonic_ms();
 
         // CRITICAL: Snapshot state BEFORE invoke for rollback on failure
         // If transaction fails, we must restore state to match what's persisted
@@ -244,7 +300,9 @@ where
             .swap_kv(Box::new(ArcContextKV(buffering_kv.clone())));
 
         // Execute the actor's invoke with the buffering KV
-        let result = tokio::time::timeout(
+        let runtime = kelpie_core::current_runtime();
+        let result = kelpie_core::Runtime::timeout(
+            &runtime,
             Duration::from_millis(ACTOR_INVOCATION_TIMEOUT_MS_MAX),
             self.actor
                 .invoke(&mut self.context, operation, payload.clone()),
@@ -257,7 +315,7 @@ where
         // Drain buffered operations from our Arc reference
         let buffered_ops = buffering_kv.drain_buffer();
 
-        let duration = start.elapsed();
+        let duration_ms = time.monotonic_ms().saturating_sub(start_ms);
 
         // On successful invocation, persist state AND KV atomically in a transaction
         let final_result = match result {
@@ -303,7 +361,7 @@ where
         };
 
         self.stats
-            .record_invocation(duration, final_result.is_err());
+            .record_invocation_with_time(duration_ms, final_result.is_err(), time.as_ref());
         final_result
     }
 
@@ -434,7 +492,7 @@ where
     pub fn should_deactivate(&self) -> bool {
         self.state == ActivationState::Active
             && self.mailbox.is_empty()
-            && self.stats.idle_time() > self.idle_timeout
+            && self.stats.idle_time_ms(self.time.as_ref()) > self.idle_timeout.as_millis() as u64
     }
 
     /// Get the current activation state
@@ -581,17 +639,18 @@ mod tests {
 
     #[test]
     fn test_activation_stats() {
-        let mut stats = ActivationStats::new();
+        let time = WallClockTime::new();
+        let mut stats = ActivationStats::with_time(&time);
 
         assert_eq!(stats.invocation_count, 0);
         assert_eq!(stats.error_count, 0);
 
-        stats.record_invocation(Duration::from_millis(10), false);
-        stats.record_invocation(Duration::from_millis(20), true);
+        stats.record_invocation_with_time(10, false, &time);
+        stats.record_invocation_with_time(20, true, &time);
 
         assert_eq!(stats.invocation_count, 2);
         assert_eq!(stats.error_count, 1);
-        assert_eq!(stats.total_processing_time, Duration::from_millis(30));
+        assert_eq!(stats.total_processing_time_ms, 30);
         assert_eq!(stats.average_processing_time(), Duration::from_millis(15));
     }
 

@@ -10,8 +10,9 @@ use kelpie_core::actor::{Actor, ActorId, ActorRef};
 use kelpie_core::error::{Error, Result};
 use kelpie_storage::ActorKV;
 use serde::{de::DeserializeOwned, Serialize};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
-use tokio::task::JoinHandle;
 use tracing::{info, instrument};
 
 /// Configuration for the runtime
@@ -22,27 +23,31 @@ pub struct RuntimeConfig {
 }
 
 /// Builder for creating a runtime
-pub struct RuntimeBuilder<A, S>
+pub struct RuntimeBuilder<A, S, R>
 where
     A: Actor<State = S>,
     S: Serialize + DeserializeOwned + Default + Send + Sync + 'static,
+    R: kelpie_core::Runtime,
 {
     factory: Option<Arc<dyn ActorFactory<A>>>,
     kv: Option<Arc<dyn ActorKV>>,
+    runtime: Option<R>,
     config: RuntimeConfig,
     _phantom: std::marker::PhantomData<S>,
 }
 
-impl<A, S> RuntimeBuilder<A, S>
+impl<A, S, R> RuntimeBuilder<A, S, R>
 where
     A: Actor<State = S>,
     S: Serialize + DeserializeOwned + Default + Send + Sync + Clone + 'static,
+    R: kelpie_core::Runtime + 'static,
 {
     /// Create a new runtime builder
     pub fn new() -> Self {
         Self {
             factory: None,
             kv: None,
+            runtime: None,
             config: RuntimeConfig::default(),
             _phantom: std::marker::PhantomData,
         }
@@ -60,6 +65,12 @@ where
         self
     }
 
+    /// Set the runtime
+    pub fn with_runtime(mut self, runtime: R) -> Self {
+        self.runtime = Some(runtime);
+        self
+    }
+
     /// Set the configuration
     pub fn with_config(mut self, config: RuntimeConfig) -> Self {
         self.config = config;
@@ -67,7 +78,7 @@ where
     }
 
     /// Build the runtime
-    pub fn build(self) -> Result<Runtime<A, S>> {
+    pub fn build(self) -> Result<Runtime<A, S, R>> {
         let factory = self.factory.ok_or_else(|| Error::Internal {
             message: "factory is required".into(),
         })?;
@@ -76,14 +87,19 @@ where
             message: "kv store is required".into(),
         })?;
 
-        Ok(Runtime::new(factory, kv, self.config))
+        let runtime = self.runtime.ok_or_else(|| Error::Internal {
+            message: "runtime is required".into(),
+        })?;
+
+        Ok(Runtime::new(factory, kv, self.config, runtime))
     }
 }
 
-impl<A, S> Default for RuntimeBuilder<A, S>
+impl<A, S, R> Default for RuntimeBuilder<A, S, R>
 where
     A: Actor<State = S>,
     S: Serialize + DeserializeOwned + Default + Send + Sync + Clone + 'static,
+    R: kelpie_core::Runtime + 'static,
 {
     fn default() -> Self {
         Self::new()
@@ -91,10 +107,11 @@ where
 }
 
 /// Convenience method to create runtime for cloneable actors
-impl<A, S> RuntimeBuilder<A, S>
+impl<A, S, R> RuntimeBuilder<A, S, R>
 where
     A: Actor<State = S> + Clone,
     S: Serialize + DeserializeOwned + Default + Send + Sync + Clone + 'static,
+    R: kelpie_core::Runtime + 'static,
 {
     /// Set a prototype actor (will be cloned for each activation)
     pub fn with_actor(self, actor: A) -> Self {
@@ -105,38 +122,46 @@ where
 /// The main Kelpie runtime
 ///
 /// Manages actor lifecycle, message routing, and coordination.
-pub struct Runtime<A, S>
+pub struct Runtime<A, S, R>
 where
     A: Actor<State = S>,
     S: Serialize + DeserializeOwned + Default + Send + Sync + Clone + 'static,
+    R: kelpie_core::Runtime,
 {
     /// The dispatcher
-    dispatcher: Option<Dispatcher<A, S>>,
+    dispatcher: Option<Dispatcher<A, S, R>>,
     /// Handle for sending commands
-    handle: DispatcherHandle,
+    handle: DispatcherHandle<R>,
+    /// Runtime for spawning tasks
+    runtime: R,
     /// Background task handle
-    task: Option<JoinHandle<()>>,
+    task: Option<
+        Pin<Box<dyn Future<Output = std::result::Result<(), kelpie_core::JoinError>> + Send>>,
+    >,
     /// Configuration
     config: RuntimeConfig,
 }
 
-impl<A, S> Runtime<A, S>
+impl<A, S, R> Runtime<A, S, R>
 where
     A: Actor<State = S>,
     S: Serialize + DeserializeOwned + Default + Send + Sync + Clone + 'static,
+    R: kelpie_core::Runtime + 'static,
 {
     /// Create a new runtime
     pub fn new(
         factory: Arc<dyn ActorFactory<A>>,
         kv: Arc<dyn ActorKV>,
         config: RuntimeConfig,
+        runtime: R,
     ) -> Self {
-        let dispatcher = Dispatcher::new(factory, kv, config.dispatcher.clone());
+        let dispatcher = Dispatcher::new(factory, kv, config.dispatcher.clone(), runtime.clone());
         let handle = dispatcher.handle();
 
         Self {
             dispatcher: Some(dispatcher),
             handle,
+            runtime,
             task: None,
             config,
         }
@@ -159,7 +184,7 @@ where
 
         info!("Starting Kelpie runtime");
 
-        self.task = Some(tokio::spawn(async move {
+        self.task = Some(self.runtime.spawn(async move {
             dispatcher.run().await;
         }));
 
@@ -180,17 +205,17 @@ where
     }
 
     /// Get a handle to the dispatcher
-    pub fn dispatcher_handle(&self) -> DispatcherHandle {
+    pub fn dispatcher_handle(&self) -> DispatcherHandle<R> {
         self.handle.clone()
     }
 
     /// Get an actor handle builder
-    pub fn actor_handles(&self) -> ActorHandleBuilder {
+    pub fn actor_handles(&self) -> ActorHandleBuilder<R> {
         ActorHandleBuilder::new(self.handle.clone())
     }
 
     /// Get a handle to a specific actor
-    pub fn actor(&self, actor_id: ActorId) -> ActorHandle {
+    pub fn actor(&self, actor_id: ActorId) -> ActorHandle<R> {
         ActorHandle::new(ActorRef::new(actor_id), self.handle.clone())
     }
 
@@ -199,14 +224,14 @@ where
         &self,
         namespace: impl Into<String>,
         id: impl Into<String>,
-    ) -> Result<ActorHandle> {
+    ) -> Result<ActorHandle<R>> {
         let actor_id = ActorId::new(namespace, id)?;
         Ok(self.actor(actor_id))
     }
 
     /// Check if the runtime is running
     pub fn is_running(&self) -> bool {
-        self.task.as_ref().is_some_and(|t| !t.is_finished())
+        self.task.is_some()
     }
 
     /// Get the runtime configuration
@@ -215,17 +240,17 @@ where
     }
 }
 
-impl<A, S> Drop for Runtime<A, S>
+impl<A, S, R> Drop for Runtime<A, S, R>
 where
     A: Actor<State = S>,
     S: Serialize + DeserializeOwned + Default + Send + Sync + Clone + 'static,
+    R: kelpie_core::Runtime,
 {
     fn drop(&mut self) {
         if self.task.is_some() {
-            // Can't await in drop, so we just abort the task
-            if let Some(task) = self.task.take() {
-                task.abort();
-            }
+            // Can't await in drop, task will be dropped
+            // User should call stop() before dropping
+            self.task.take();
         }
     }
 }
@@ -236,6 +261,7 @@ mod tests {
     use async_trait::async_trait;
     use bytes::Bytes;
     use kelpie_core::actor::ActorContext;
+    use kelpie_core::Runtime;
     use kelpie_storage::MemoryKV;
 
     #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
@@ -271,11 +297,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_runtime_basic() {
+        use kelpie_core::TokioRuntime;
+
         let kv = Arc::new(MemoryKV::new());
+        let rt = TokioRuntime;
 
         let mut runtime = RuntimeBuilder::new()
             .with_actor(CounterActor)
             .with_kv(kv)
+            .with_runtime(rt)
             .build()
             .unwrap();
 
@@ -296,11 +326,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_runtime_multiple_actors() {
+        use kelpie_core::TokioRuntime;
+
         let kv = Arc::new(MemoryKV::new());
+        let rt = TokioRuntime;
 
         let mut runtime = RuntimeBuilder::new()
             .with_actor(CounterActor)
             .with_kv(kv)
+            .with_runtime(rt)
             .build()
             .unwrap();
 
@@ -326,13 +360,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_runtime_state_persistence() {
+        use kelpie_core::TokioRuntime;
+
         let kv = Arc::new(MemoryKV::new());
+        let rt = TokioRuntime;
 
         // First runtime instance
         {
             let mut runtime = RuntimeBuilder::new()
                 .with_actor(CounterActor)
                 .with_kv(kv.clone())
+                .with_runtime(rt.clone())
                 .build()
                 .unwrap();
 
@@ -344,7 +382,7 @@ mod tests {
 
             // Deactivate to persist state
             actor.deactivate().await.unwrap();
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            rt.sleep(std::time::Duration::from_millis(10)).await;
 
             runtime.stop().await.unwrap();
         }
@@ -354,6 +392,7 @@ mod tests {
             let mut runtime = RuntimeBuilder::new()
                 .with_actor(CounterActor)
                 .with_kv(kv)
+                .with_runtime(rt)
                 .build()
                 .unwrap();
 

@@ -9,6 +9,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use kelpie_core::Runtime;
 use kelpie_server::models::{Block, CreateBlockRequest, ListResponse, UpdateBlockRequest};
 use kelpie_server::state::AppState;
 use serde::Deserialize;
@@ -36,7 +37,7 @@ fn default_limit() -> usize {
 const LIST_LIMIT_MAX: usize = 100;
 
 /// Create standalone blocks routes
-pub fn router() -> Router<AppState> {
+pub fn router<R: Runtime + 'static>() -> Router<AppState<R>> {
     Router::new()
         .route("/", get(list_blocks).post(create_block))
         .route(
@@ -49,8 +50,8 @@ pub fn router() -> Router<AppState> {
 ///
 /// POST /v1/blocks
 #[instrument(skip(state, request), fields(label = %request.label), level = "info")]
-async fn create_block(
-    State(state): State<AppState>,
+async fn create_block<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Json(request): Json<CreateBlockRequest>,
 ) -> Result<Json<Block>, ApiError> {
     // Validate request
@@ -86,8 +87,8 @@ async fn create_block(
 ///
 /// GET /v1/blocks/{block_id}
 #[instrument(skip(state), fields(block_id = %block_id), level = "info")]
-async fn get_block(
-    State(state): State<AppState>,
+async fn get_block<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(block_id): Path<String>,
 ) -> Result<Json<Block>, ApiError> {
     let block = state
@@ -101,8 +102,8 @@ async fn get_block(
 ///
 /// GET /v1/blocks
 #[instrument(skip(state, query), fields(limit = query.limit, label = ?query.label), level = "info")]
-async fn list_blocks(
-    State(state): State<AppState>,
+async fn list_blocks<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Query(query): Query<ListBlocksQuery>,
 ) -> Result<Json<ListResponse<Block>>, ApiError> {
     let limit = query.limit.min(LIST_LIMIT_MAX);
@@ -122,8 +123,8 @@ async fn list_blocks(
 ///
 /// PATCH /v1/blocks/{block_id}
 #[instrument(skip(state, request), fields(block_id = %block_id), level = "info")]
-async fn update_block(
-    State(state): State<AppState>,
+async fn update_block<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(block_id): Path<String>,
     Json(request): Json<UpdateBlockRequest>,
 ) -> Result<Json<Block>, ApiError> {
@@ -158,8 +159,8 @@ async fn update_block(
 ///
 /// DELETE /v1/blocks/{block_id}
 #[instrument(skip(state), fields(block_id = %block_id), level = "info")]
-async fn delete_block(
-    State(state): State<AppState>,
+async fn delete_block<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(block_id): Path<String>,
 ) -> Result<(), ApiError> {
     state.delete_standalone_block(&block_id)?;
@@ -176,7 +177,7 @@ mod tests {
     use tower::ServiceExt;
 
     async fn test_app() -> Router {
-        api::router(AppState::new())
+        api::router(AppState::new(kelpie_core::TokioRuntime))
     }
 
     #[tokio::test]

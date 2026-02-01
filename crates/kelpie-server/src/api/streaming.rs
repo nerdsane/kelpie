@@ -9,7 +9,7 @@ use axum::{
 };
 use chrono::Utc;
 use futures::stream::{self, Stream, StreamExt};
-use kelpie_sandbox::{ExecOptions, ProcessSandbox, Sandbox, SandboxConfig};
+use kelpie_core::Runtime;
 use kelpie_server::llm::{ChatMessage, ContentBlock};
 use kelpie_server::models::{CreateMessageRequest, Message, MessageRole};
 use kelpie_server::state::AppState;
@@ -85,8 +85,8 @@ struct StopReasonEvent {
 ///
 /// POST /v1/agents/{agent_id}/messages/stream
 #[instrument(skip(state, _query, request), fields(agent_id = %agent_id), level = "info")]
-pub async fn send_message_stream(
-    State(state): State<AppState>,
+pub async fn send_message_stream<R: Runtime + 'static>(
+    State(state): State<AppState<R>>,
     Path(agent_id): Path<String>,
     Query(_query): Query<StreamQuery>,
     axum::Json(request): axum::Json<CreateMessageRequest>,
@@ -121,12 +121,15 @@ pub async fn send_message_stream(
         role: role.clone(),
         content: content.clone(),
         tool_call_id: request.tool_call_id.clone(),
-        tool_calls: None,
+        tool_calls: vec![],
+        tool_call: None,
+        tool_return: None,
+        status: None,
         created_at: Utc::now(),
     };
 
-    // Store user message
-    let _stored_user_msg = state.add_message(&agent_id, user_message)?;
+    // Store user message (with storage persistence)
+    let _stored_user_msg = state.add_message_async(&agent_id, user_message).await?;
 
     // Phase 7.9: Use token streaming if requested
     let use_token_streaming = _query.stream_tokens;
@@ -168,8 +171,8 @@ pub async fn send_message_stream(
 }
 
 /// Generate all SSE events for a response
-async fn generate_response_events(
-    state: &AppState,
+async fn generate_response_events<R: Runtime + 'static>(
+    state: &AppState<R>,
     agent_id: &str,
     agent: &kelpie_server::models::AgentState,
     llm: &crate::llm::LlmClient,
@@ -254,10 +257,16 @@ async fn generate_response_events(
                     }
                 }
 
-                // Execute tools
+                // Execute tools using the tool registry
                 let mut tool_results = Vec::new();
                 for tool_call in &response.tool_calls {
-                    let result = execute_tool(&tool_call.name, &tool_call.input).await;
+                    let result = match state
+                        .execute_tool(&tool_call.name, tool_call.input.clone())
+                        .await
+                    {
+                        Ok(output) => output,
+                        Err(e) => format!("Tool execution error: {}", e),
+                    };
 
                     // Send tool return event
                     let return_msg = SseMessage::ToolReturnMessage {
@@ -320,7 +329,7 @@ async fn generate_response_events(
                 events.push(Ok(Event::default().data(json)));
             }
 
-            // Store assistant message
+            // Store assistant message - log error if persistence fails
             let assistant_message = Message {
                 id: Uuid::new_v4().to_string(),
                 agent_id: agent_id.to_string(),
@@ -328,10 +337,23 @@ async fn generate_response_events(
                 role: MessageRole::Assistant,
                 content: final_content,
                 tool_call_id: None,
-                tool_calls: None,
+                tool_calls: vec![],
+                tool_call: None,
+                tool_return: None,
+                status: None,
                 created_at: Utc::now(),
             };
-            let _ = state.add_message(agent_id, assistant_message);
+            if let Err(e) = state.add_message_async(agent_id, assistant_message).await {
+                tracing::error!(agent_id = %agent_id, error = ?e, "failed to persist assistant message in streaming");
+                // Send error event to client so they know persistence failed
+                let error_event = SseMessage::AssistantMessage {
+                    id: Uuid::new_v4().to_string(),
+                    content: format!("[Warning: message persistence failed: {}]", e),
+                };
+                if let Ok(json) = serde_json::to_string(&error_event) {
+                    events.push(Ok(Event::default().data(json)));
+                }
+            }
         }
         Err(e) => {
             // Send error as assistant message
@@ -374,8 +396,8 @@ async fn generate_response_events(
 /// Generate streaming SSE events using real LLM token streaming (Phase 7.9)
 ///
 /// Returns stream of SSE events as tokens arrive from LLM.
-async fn generate_streaming_response_events(
-    state: &AppState,
+async fn generate_streaming_response_events<R: Runtime + 'static>(
+    state: &AppState<R>,
     agent_id: &str,
     agent: &kelpie_server::models::AgentState,
     llm: &crate::llm::LlmClient,
@@ -460,10 +482,25 @@ async fn generate_streaming_response_events(
                                         role: MessageRole::Assistant,
                                         content: content_buf.clone(),
                                         tool_call_id: None,
-                                        tool_calls: None,
+                                        tool_calls: vec![],
+                                        tool_call: None,
+                                        tool_return: None,
+                                        status: None,
                                         created_at: Utc::now(),
                                     };
-                                    let _ = state_ref.add_message(agent_id_ref, assistant_message);
+
+                                    // TigerStyle: No silent failures - log and notify client
+                                    if let Err(e) =
+                                        state_ref.add_message(agent_id_ref, assistant_message)
+                                    {
+                                        tracing::error!(
+                                            agent_id = %agent_id_ref,
+                                            error = ?e,
+                                            "failed to persist assistant message in token streaming"
+                                        );
+                                        // Note: We still send stop_reason but client should be aware
+                                        // persistence may have failed (logged server-side)
+                                    }
 
                                     // Send stop_reason event
                                     let stop_event = StopReasonEvent {
@@ -545,59 +582,5 @@ fn build_system_prompt(system: &Option<String>, blocks: &[kelpie_server::models:
     parts.join("\n")
 }
 
-/// Execute a tool and return the result
-async fn execute_tool(name: &str, input: &serde_json::Value) -> String {
-    match name {
-        "shell" => {
-            let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
-
-            if command.is_empty() {
-                return "Error: No command provided".to_string();
-            }
-
-            execute_in_sandbox(command).await
-        }
-        _ => format!("Unknown tool: {}", name),
-    }
-}
-
-/// Execute a command in a sandboxed environment
-async fn execute_in_sandbox(command: &str) -> String {
-    let config = SandboxConfig::default();
-    let mut sandbox = ProcessSandbox::new(config);
-
-    if let Err(e) = sandbox.start().await {
-        return format!("Failed to start sandbox: {}", e);
-    }
-
-    let exec_opts = ExecOptions::new()
-        .with_timeout(Duration::from_secs(30))
-        .with_max_output(1024 * 1024);
-
-    match sandbox.exec("sh", &["-c", command], exec_opts).await {
-        Ok(output) => {
-            let stdout = output.stdout_string();
-            let stderr = output.stderr_string();
-
-            if output.is_success() {
-                if stdout.is_empty() {
-                    "Command executed successfully (no output)".to_string()
-                } else if stdout.len() > 4000 {
-                    format!(
-                        "{}...\n[truncated, {} total bytes]",
-                        &stdout[..4000],
-                        stdout.len()
-                    )
-                } else {
-                    stdout
-                }
-            } else {
-                format!(
-                    "Command failed with exit code {}:\n{}{}",
-                    output.status.code, stdout, stderr
-                )
-            }
-        }
-        Err(e) => format!("Sandbox execution failed: {}", e),
-    }
-}
+// Tool execution now uses state.execute_tool() which routes through the tool registry.
+// This provides dynamic dispatch for all registered tools instead of hardcoding "shell".

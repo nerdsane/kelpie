@@ -317,6 +317,7 @@ impl SimHttpClient {
                     // Use tokio::time::sleep instead of SimClock.sleep_ms()
                     // SimClock.sleep_ms() waits for manual clock advancement which doesn't
                     // happen in async HTTP context, causing deadlock.
+                    #[allow(clippy::disallowed_methods)] // Intentional - see comment above
                     tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
                 }
                 _ => {}
@@ -378,6 +379,9 @@ impl HttpClient for SimHttpClient {
                             tracing::debug!(delay_ms = delay_ms, "HTTP chunk delayed");
 
                             // Use tokio::time::sleep instead of SimClock.sleep_ms()
+                            // SimClock.sleep_ms() waits for manual clock advancement which doesn't
+                            // happen in async HTTP context, causing deadlock.
+                            #[allow(clippy::disallowed_methods)] // Intentional - see comment above
                             tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
                         }
                         _ => {}

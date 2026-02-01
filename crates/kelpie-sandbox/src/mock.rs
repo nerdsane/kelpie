@@ -327,20 +327,13 @@ impl Sandbox for MockSandbox {
 }
 
 /// Factory for creating mock sandboxes
-#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct MockSandboxFactory;
 
-#[allow(dead_code)]
 impl MockSandboxFactory {
     /// Create a new factory
     pub fn new() -> Self {
         Self
-    }
-}
-
-impl Default for MockSandboxFactory {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

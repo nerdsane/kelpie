@@ -11,6 +11,7 @@ authors.workspace = true
 [dependencies]
 kelpie-core = { workspace = true }
 kelpie-storage = { workspace = true }
+kelpie-registry = { workspace = true }
 bytes = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }

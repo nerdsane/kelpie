@@ -4,3 +4,19 @@
 cognitive-complexity-threshold = 30
 too-many-arguments-threshold = 8
 type-complexity-threshold = 500
+
+# DST Enforcement: Ban raw tokio calls that bypass Runtime abstraction
+# All async operations must go through kelpie_core::Runtime trait for
+# deterministic simulation testing (DST) compatibility.
+#
+# Allowed alternatives:
+# - tokio::spawn        → kelpie_core::current_runtime().spawn()
+# - tokio::time::sleep  → kelpie_core::current_runtime().sleep()
+# - tokio::time::timeout → kelpie_core::current_runtime().timeout()
+#
+# Exception: TokioRuntime implementation itself (crates/kelpie-core/src/runtime.rs)
+disallowed-methods = [
+    { path = "tokio::spawn", reason = "Use kelpie_core::current_runtime().spawn() for DST compatibility" },
+    { path = "tokio::time::sleep", reason = "Use kelpie_core::current_runtime().sleep() for DST compatibility" },
+    { path = "tokio::time::timeout", reason = "Use kelpie_core::current_runtime().timeout() for DST compatibility" },
+]
